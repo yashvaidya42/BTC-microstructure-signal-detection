@@ -77,8 +77,8 @@ LOG_TRANSFORM_IDX = [3]  # trade_intensity
 #   'sqrt'       -> Use sqrt of inverse frequency
 #   'linear'     -> Use linear inverse frequency (original)
 
-CLASS_WEIGHT_MODE = 'fixed'  # Change this to experiment
-FIXED_CLASS_WEIGHTS = np.array([10.0, 0.5, 10.0])  # [DOWN, NEUTRAL, UP]
+CLASS_WEIGHT_MODE = 'linear'  # Change this to experiment
+FIXED_CLASS_WEIGHTS = np.array([1, 1, 1])  # [DOWN, NEUTRAL, UP]
 
 
 # =============================================================================
@@ -241,7 +241,7 @@ def stratified_oversample(
     if target_ratio is None:
         # Target: make UP and DOWN equal to 30% of NEUTRAL count each
         neutral_count = counts[1]
-        target_minority = int(neutral_count * 0.3)
+        target_minority = int(neutral_count * 0.8)
         target_counts = {
             0: max(counts[0], target_minority),  # DOWN
             1: counts[1],                         # NEUTRAL (unchanged)
@@ -556,17 +556,23 @@ def run_optuna(
             'gamma': gamma,
         })
         
-        # Print confusion matrix every 5 trials
-        if (trial.number + 1) % 5 == 0:
+        # Print detailed class metrics every 5 trials
+        if (trial.number + 1) % 1 == 0:
             print(f"\n{'='*60}")
             print(f"TRIAL {trial.number + 1} SUMMARY")
             print(f"{'='*60}")
-            print(f"Macro F1: {metrics['macro_f1']:.4f}")
-            print(f"UP+DOWN Recall Avg: {metrics['up_down_recall_avg']:.4f}")
-            print(f"Per-class Recall: DOWN={metrics['recall']['DOWN']:.3f}, "
+            print(f"Macro F1 (Overall): {metrics['macro_f1']:.4f}")
+            
+            # Direct F1 values for each class
+            print(f"Individual F1 Scores:")
+            print(f"  - DOWN:    {metrics['f1']['DOWN']:.4f}")
+            print(f"  - NEUTRAL: {metrics['f1']['NEUTRAL']:.4f}")
+            print(f"  - UP:      {metrics['f1']['UP']:.4f}")
+            
+            print(f"\nPer-class Recall: DOWN={metrics['recall']['DOWN']:.3f}, "
                   f"NEUTRAL={metrics['recall']['NEUTRAL']:.3f}, "
                   f"UP={metrics['recall']['UP']:.3f}")
-            print(f"Focal Gamma: {gamma:.2f}")
+            
             print_confusion_matrix(metrics['confusion_matrix'], "Validation Confusion Matrix")
             print(f"{'='*60}\n")
         

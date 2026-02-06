@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
-HIGH-PERFORMANCE PREPROCESSING - FULLY TIME-BASED
-==================================================
-ALL WINDOWS ARE NOW TIME-BASED (seconds), NOT TRADE-COUNT BASED.
+HIGH-PERFORMANCE PREPROCESSING - HYBRID MEMORY-AWARE
+=====================================================
+Optimized for: Intel i5-11400H (6 cores, 12 threads), 8GB RAM
 
-This ensures consistent feature computation regardless of market activity:
-- High volume day (8000 trades/min): 5 min window = 5 min
-- Low volume day (450 trades/min): 5 min window = 5 min
+KEY FEATURES:
+1. O(n) sliding window rolling functions (Numba JIT)
+2. Hybrid parallel/sequential processing with RAM monitoring
+3. NO COMBINE STEP - outputs individual daily parquets directly
+4. Automatic metadata.json generation for downstream consumption
 
-OPTIMIZATIONS:
-1. Numba JIT for time-based rolling computations with O(n) sliding window
-2. Parallel batch processing with multiprocessing
-3. Vectorized feature computation
-4. Boundary correction for parallel batches
+OUTPUT: ./processed_daily_parquets/day_XXXX.parquet + metadata.json
 """
 
 import os
@@ -25,14 +23,25 @@ from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 import gc
-from concurrent.futures import ThreadPoolExecutor
+import multiprocessing as mp
+import time
+import json
 import warnings
 
 warnings.filterwarnings('ignore')
 
+# Try to import psutil for memory monitoring
+try:
+    import psutil
+    HAS_PSUTIL = True
+    print("[OK] psutil available - memory monitoring enabled")
+except ImportError:
+    HAS_PSUTIL = False
+    print("[WARN] psutil not available - using sequential mode for safety")
+
 # Try to import numba
 try:
-    from numba import jit, prange
+    from numba import jit
     HAS_NUMBA = True
     print("[OK] Numba available - using JIT compilation")
 except ImportError:
@@ -44,7 +53,7 @@ except ImportError:
 # =============================================================================
 
 INPUT_DIR = r"C:\Users\yashv\Desktop\personal_work\quant_ML_model\data\btc_trades_2025"
-OUTPUT_FILE = "./btc_processed_stationary.parquet"
+OUTPUT_DIR = "./processed_daily_parquets"  # Final output directory (no temp)
 
 DELETE_ZIPS_AFTER_PROCESSING = False
 
@@ -53,31 +62,66 @@ DELETE_ZIPS_AFTER_PROCESSING = False
 # =============================================================================
 
 LOOK_AHEAD_SECONDS = 300          # 5 min - prediction horizon
-
 VOLATILITY_WINDOW_SEC = 300       # 5 min - for price_volatility feature
 VOLUME_WINDOW_SEC = 300           # 5 min - for rolling_signed_volume
 ROLLING_STATS_WINDOW_SEC = 60     # 1 min - for short-term features
 
 # =============================================================================
-# LABELING THRESHOLDS (tuned for 15-20% UP/DOWN)
+# LABELING THRESHOLDS
 # =============================================================================
 
-Z_SCORE_THRESHOLD = 0.2         # Lower = more UP/DOWN labels
-MIN_PROFIT_PCT = 0.0004         # 0.04% fee floor
+Z_SCORE_THRESHOLD = 1           # Adaptive threshold multiplier
+MIN_PROFIT_PCT = 0.001           # 0.07% minimum move (fee floor)
 
 # =============================================================================
-# PERFORMANCE TUNING
+# PERFORMANCE TUNING (Optimized for i5-11400H + 8GB RAM)
 # =============================================================================
 
-BATCH_SIZE = 3                    # Days per batch
-IO_THREADS = 6                    # Parallel I/O threads (increased for 12-thread CPU)
+BATCH_SIZE = 2                    # Days per batch (more work per IPC call)
+NUM_WORKERS = 6                   # Conservative: 2 workers to avoid OOM
+
+# =============================================================================
+# MEMORY MANAGEMENT
+# =============================================================================
+
+RAM_THRESHOLD_PERCENT = 85        # Switch to sequential above this
+RAM_SAFE_PERCENT = 70             # Resume parallel below this
 
 # Buffer for boundary correction: 10 minutes in microseconds
-BOUNDARY_BUFFER_SEC = 600         # 10 minutes
+BOUNDARY_BUFFER_SEC = 600
 BOUNDARY_BUFFER_US = BOUNDARY_BUFFER_SEC * 1_000_000
 
 print(f"[CONFIG] Look-ahead: {LOOK_AHEAD_SECONDS}s, Volatility window: {VOLATILITY_WINDOW_SEC}s")
 print(f"[CONFIG] Z-threshold: {Z_SCORE_THRESHOLD}, Min profit: {MIN_PROFIT_PCT*100:.2f}%")
+print(f"[CONFIG] Batch size: {BATCH_SIZE}, Workers: {NUM_WORKERS}")
+
+
+# =============================================================================
+# MEMORY MONITORING UTILITIES
+# =============================================================================
+
+def get_ram_usage_percent():
+    """Get current RAM usage as percentage (0-100)."""
+    if HAS_PSUTIL:
+        return psutil.virtual_memory().percent
+    return 90.0  # Conservative fallback
+
+
+def log_ram_status(prefix=""):
+    """Log current RAM status."""
+    if HAS_PSUTIL:
+        mem = psutil.virtual_memory()
+        print(f"{prefix}[RAM] {mem.percent:.1f}% ({mem.used/1024**3:.1f}/{mem.total/1024**3:.1f} GB)")
+
+
+def is_ram_critical():
+    """Check if RAM usage is above critical threshold."""
+    return get_ram_usage_percent() >= RAM_THRESHOLD_PERCENT
+
+
+def is_ram_safe():
+    """Check if RAM has recovered to safe levels."""
+    return get_ram_usage_percent() < RAM_SAFE_PERCENT
 
 
 # =============================================================================
@@ -87,20 +131,7 @@ print(f"[CONFIG] Z-threshold: {Z_SCORE_THRESHOLD}, Min profit: {MIN_PROFIT_PCT*1
 if HAS_NUMBA:
     @jit(nopython=True, cache=True)
     def rolling_std_time_based(timestamps_us, values, window_seconds):
-        """
-        Time-based rolling standard deviation using O(n) sliding window.
-        
-        Maintains running sum, sum of squares, and count to avoid recomputation.
-        Uses Welford-style online variance for numerical stability.
-        
-        Args:
-            timestamps_us: Timestamps in microseconds (must be sorted)
-            values: Values to compute std over
-            window_seconds: Window size in seconds
-        
-        Returns:
-            Array of rolling std values
-        """
+        """Time-based rolling standard deviation using O(n) sliding window."""
         n = len(values)
         result = np.empty(n, dtype=np.float64)
         window_us = window_seconds * 1_000_000
@@ -110,24 +141,19 @@ if HAS_NUMBA:
         running_sum_sq = 0.0
         
         for right in range(n):
-            # Add current element to window
             running_sum += values[right]
             running_sum_sq += values[right] * values[right]
             
-            # Shrink window from left while timestamps fall out of window
             min_time = timestamps_us[right] - window_us
             while left < right and timestamps_us[left] < min_time:
                 running_sum -= values[left]
                 running_sum_sq -= values[left] * values[left]
                 left += 1
             
-            # Compute std for window [left, right]
             count = right - left + 1
             if count >= 2:
                 mean = running_sum / count
-                # Variance = E[X^2] - E[X]^2
                 variance = (running_sum_sq / count) - (mean * mean)
-                # Handle numerical issues (can be slightly negative due to floating point)
                 if variance < 0.0:
                     variance = 0.0
                 result[right] = np.sqrt(variance)
@@ -138,17 +164,7 @@ if HAS_NUMBA:
 
     @jit(nopython=True, cache=True)
     def rolling_sum_time_based(timestamps_us, values, window_seconds):
-        """
-        Time-based rolling sum using O(n) sliding window.
-        
-        Args:
-            timestamps_us: Timestamps in microseconds (must be sorted)
-            values: Values to sum
-            window_seconds: Window size in seconds
-        
-        Returns:
-            Array of rolling sum values
-        """
+        """Time-based rolling sum using O(n) sliding window."""
         n = len(values)
         result = np.empty(n, dtype=np.float64)
         window_us = window_seconds * 1_000_000
@@ -157,10 +173,8 @@ if HAS_NUMBA:
         running_sum = 0.0
         
         for right in range(n):
-            # Add current element
             running_sum += values[right]
             
-            # Shrink window from left
             min_time = timestamps_us[right] - window_us
             while left < right and timestamps_us[left] < min_time:
                 running_sum -= values[left]
@@ -172,17 +186,7 @@ if HAS_NUMBA:
 
     @jit(nopython=True, cache=True)
     def rolling_mean_time_based(timestamps_us, values, window_seconds):
-        """
-        Time-based rolling mean using O(n) sliding window.
-        
-        Args:
-            timestamps_us: Timestamps in microseconds (must be sorted)
-            values: Values to average
-            window_seconds: Window size in seconds
-        
-        Returns:
-            Array of rolling mean values
-        """
+        """Time-based rolling mean using O(n) sliding window."""
         n = len(values)
         result = np.empty(n, dtype=np.float64)
         window_us = window_seconds * 1_000_000
@@ -191,10 +195,8 @@ if HAS_NUMBA:
         running_sum = 0.0
         
         for right in range(n):
-            # Add current element
             running_sum += values[right]
             
-            # Shrink window from left
             min_time = timestamps_us[right] - window_us
             while left < right and timestamps_us[left] < min_time:
                 running_sum -= values[left]
@@ -214,7 +216,6 @@ if HAS_NUMBA:
         for i in range(n):
             target_time = timestamps_us[i] + look_ahead_us
             
-            # Binary search for target_time
             left = np.int64(i)
             right = np.int64(n)
             while left < right:
@@ -232,13 +233,11 @@ if HAS_NUMBA:
         return future_prices
 
 else:
-    # Pure numpy fallbacks with O(n) sliding window
+    # Pure numpy fallbacks
     def rolling_std_time_based(timestamps_us, values, window_seconds):
-        """Numpy O(n) sliding window implementation."""
         n = len(values)
         result = np.empty(n, dtype=np.float64)
         window_us = window_seconds * 1_000_000
-        
         left = 0
         running_sum = 0.0
         running_sum_sq = 0.0
@@ -246,13 +245,11 @@ else:
         for right in range(n):
             running_sum += values[right]
             running_sum_sq += values[right] * values[right]
-            
             min_time = timestamps_us[right] - window_us
             while left < right and timestamps_us[left] < min_time:
                 running_sum -= values[left]
                 running_sum_sq -= values[left] * values[left]
                 left += 1
-            
             count = right - left + 1
             if count >= 2:
                 mean = running_sum / count
@@ -260,54 +257,40 @@ else:
                 result[right] = np.sqrt(variance)
             else:
                 result[right] = 0.0
-        
         return result
 
     def rolling_sum_time_based(timestamps_us, values, window_seconds):
-        """Numpy O(n) sliding window implementation."""
         n = len(values)
         result = np.empty(n, dtype=np.float64)
         window_us = window_seconds * 1_000_000
-        
         left = 0
         running_sum = 0.0
-        
         for right in range(n):
             running_sum += values[right]
-            
             min_time = timestamps_us[right] - window_us
             while left < right and timestamps_us[left] < min_time:
                 running_sum -= values[left]
                 left += 1
-            
             result[right] = running_sum
-        
         return result
 
     def rolling_mean_time_based(timestamps_us, values, window_seconds):
-        """Numpy O(n) sliding window implementation."""
         n = len(values)
         result = np.empty(n, dtype=np.float64)
         window_us = window_seconds * 1_000_000
-        
         left = 0
         running_sum = 0.0
-        
         for right in range(n):
             running_sum += values[right]
-            
             min_time = timestamps_us[right] - window_us
             while left < right and timestamps_us[left] < min_time:
                 running_sum -= values[left]
                 left += 1
-            
             count = right - left + 1
             result[right] = running_sum / count
-        
         return result
 
     def find_future_price_time_based(timestamps_us, prices, look_ahead_us):
-        """Numpy vectorized implementation."""
         n = len(timestamps_us)
         future_prices = np.full(n, np.nan)
         target_times = timestamps_us + look_ahead_us
@@ -319,26 +302,21 @@ else:
 
 
 # =============================================================================
-# FEATURE COMPUTATION (FULLY TIME-BASED)
+# FEATURE COMPUTATION
 # =============================================================================
 
 def compute_features_time_based(df, verbose=True):
-    """
-    Compute all features using TIME-BASED rolling windows.
-    
-    This ensures consistent feature computation regardless of trade frequency.
-    """
+    """Compute all features using TIME-BASED rolling windows."""
     n = len(df)
     
-    # Extract arrays
     timestamps_us = df['timestamp'].values.astype(np.int64)
     prices = df['price'].values.astype(np.float64)
     qty = df['qty'].values.astype(np.float64)
     side = df['side'].values.astype(np.float64)
     
-    # === BASIC FEATURES ===
+    # Basic features
     time_delta = np.zeros(n, dtype=np.float64)
-    time_delta[1:] = (timestamps_us[1:] - timestamps_us[:-1]) / 1e6  # seconds
+    time_delta[1:] = (timestamps_us[1:] - timestamps_us[:-1]) / 1e6
     
     log_return = np.zeros(n, dtype=np.float64)
     log_return[1:] = np.log(prices[1:] / prices[:-1])
@@ -348,54 +326,40 @@ def compute_features_time_based(df, verbose=True):
     price_acceleration = np.zeros(n, dtype=np.float64)
     price_acceleration[1:] = log_return[1:] - log_return[:-1]
     
-    # === VOLUME FEATURES (TIME-BASED) ===
+    # Volume features
     buy_volume = qty * (side == 1).astype(np.float64)
     sell_volume = qty * (side == -1).astype(np.float64)
     
-    if verbose:
-        print("  Computing time-based rolling features...")
-    
     rolling_buy_vol = rolling_sum_time_based(timestamps_us, buy_volume, ROLLING_STATS_WINDOW_SEC)
     rolling_sell_vol = rolling_sum_time_based(timestamps_us, sell_volume, ROLLING_STATS_WINDOW_SEC)
-    
     volume_imbalance = (rolling_buy_vol - rolling_sell_vol) / (rolling_buy_vol + rolling_sell_vol + 1e-9)
     
-    # === SIGNED VOLUME (TIME-BASED) ===
     signed_volume = qty * side
     rolling_signed_volume = rolling_sum_time_based(timestamps_us, signed_volume, VOLUME_WINDOW_SEC)
     
-    # === VOLATILITY FEATURES (TIME-BASED) ===
+    # Volatility features
     price_volatility = rolling_std_time_based(timestamps_us, log_return, VOLATILITY_WINDOW_SEC)
     volume_volatility = rolling_std_time_based(timestamps_us, qty, ROLLING_STATS_WINDOW_SEC)
     time_delta_std = rolling_std_time_based(timestamps_us, time_delta, ROLLING_STATS_WINDOW_SEC)
     
-    # === PRICE FEATURES (TIME-BASED) ===
+    # Price features
     price_ma = rolling_mean_time_based(timestamps_us, prices, ROLLING_STATS_WINDOW_SEC)
     price_distance_from_ma = (prices - price_ma) / (price_ma + 1e-9)
     
-    # === TIME-BASED LABELING ===
+    # Labeling
     look_ahead_us = LOOK_AHEAD_SECONDS * 1_000_000
     future_price = find_future_price_time_based(timestamps_us, prices, look_ahead_us)
     future_return = (future_price - prices) / prices
     
-    # Volatility is already time-based (5 min window), so scaling is simpler
-    # Just use volatility directly - it's already "per 5 minutes"
-    volatility_scaled = price_volatility
+    upper_threshold = Z_SCORE_THRESHOLD * price_volatility
+    lower_threshold = -Z_SCORE_THRESHOLD * price_volatility
     
-    # Thresholds
-    upper_threshold = Z_SCORE_THRESHOLD * volatility_scaled
-    lower_threshold = -Z_SCORE_THRESHOLD * volatility_scaled
-    
-    # Labels
-    labels = np.ones(n, dtype=np.int8)  # Default: NEUTRAL
-    
+    labels = np.ones(n, dtype=np.int8)
     up_condition = (future_return > upper_threshold) & (future_return > MIN_PROFIT_PCT)
     down_condition = (future_return < lower_threshold) & (future_return < -MIN_PROFIT_PCT)
-    
     labels[up_condition] = 2
     labels[down_condition] = 0
     
-    # Invalid
     invalid = (
         np.isnan(future_price) | 
         np.isnan(price_volatility) | 
@@ -404,7 +368,6 @@ def compute_features_time_based(df, verbose=True):
     )
     labels[invalid] = -1
     
-    # Build result
     result = pd.DataFrame({
         'timestamp': timestamps_us,
         'datetime': df['datetime'].values,
@@ -442,36 +405,21 @@ def load_zip_to_df(zip_path):
 
 
 def process_single_day(zip_path, prev_tail_df=None, verbose=True):
-    """
-    Process one day with time-based features.
-    
-    Args:
-        zip_path: Path to zip file
-        prev_tail_df: DataFrame with last N minutes from previous day
-        verbose: Whether to print progress
-    
-    Returns:
-        (result_df, tail_df, raw_df_for_boundary) or None on error
-    """
+    """Process one day with time-based features."""
     try:
         zip_path = Path(zip_path)
         if verbose:
             print(f"  Processing {zip_path.name}...")
         
-        # Load data
         df = load_zip_to_df(zip_path)
-        
         if len(df) == 0:
             return None
         
         df = df.sort_values('timestamp').reset_index(drop=True)
         df['datetime'] = pd.to_datetime(df['timestamp'], unit='us')
         df['side'] = df['is_buyer_maker'].map({True: -1, False: 1})
-        
-        # Keep only needed columns
         df = df[['timestamp', 'price', 'qty', 'side', 'datetime']].copy()
         
-        # Concatenate with previous tail for window continuity
         if prev_tail_df is not None and len(prev_tail_df) > 0:
             df_combined = pd.concat([prev_tail_df, df], ignore_index=True)
             tail_len = len(prev_tail_df)
@@ -479,34 +427,28 @@ def process_single_day(zip_path, prev_tail_df=None, verbose=True):
             df_combined = df
             tail_len = 0
         
-        # Compute features
         result = compute_features_time_based(df_combined, verbose=verbose)
         
-        # Remove previous tail rows
         if tail_len > 0:
             result = result.iloc[tail_len:].copy()
         
-        # Remove invalid labels
         result = result[result['label'] != -1].copy()
         result = result.dropna()
         
         if len(result) == 0:
             return None
         
-        # Prepare tail for next day
-        # Keep enough data for largest window (VOLATILITY_WINDOW_SEC = 300s = 5 min)
-        # Plus some buffer = 10 min total
+        # Tail for next day
         buffer_us = 10 * 60 * 1_000_000
         last_ts = df_combined['timestamp'].iloc[-1]
         tail_mask = df_combined['timestamp'] >= (last_ts - buffer_us)
         tail_df = df_combined[tail_mask][['timestamp', 'price', 'qty', 'side', 'datetime']].copy()
         
-        # Also keep raw data for the first ~10 minutes (for boundary correction in parallel processing)
+        # Boundary data for parallel correction
         first_ts = df['timestamp'].iloc[0]
         boundary_mask = df['timestamp'] <= (first_ts + BOUNDARY_BUFFER_US)
         boundary_raw_df = df[boundary_mask][['timestamp', 'price', 'qty', 'side', 'datetime']].copy()
         
-        # Print label distribution for this day
         if verbose:
             counts = np.bincount(result['label'].values.astype(int), minlength=3)
             total = counts.sum()
@@ -520,24 +462,11 @@ def process_single_day(zip_path, prev_tail_df=None, verbose=True):
 
 
 # =============================================================================
-# BATCH PROCESSOR (SEQUENTIAL WITH IMMEDIATE DISK WRITES)
+# BATCH PROCESSORS
 # =============================================================================
 
-def process_batch_sequential(zip_paths, initial_tail, temp_dir, start_file_idx):
-    """
-    Process batch of days sequentially, writing each day to disk immediately.
-    
-    This avoids memory buildup from holding multiple large DataFrames.
-    
-    Args:
-        zip_paths: List of zip file paths
-        initial_tail: Tail DataFrame from previous batch
-        temp_dir: Directory for intermediate parquet files
-        start_file_idx: Starting index for file naming
-    
-    Returns:
-        (list of parquet paths, final tail DataFrame, label counts dict, total rows)
-    """
+def process_batch_sequential_with_disk_write(zip_paths, initial_tail, output_dir, start_file_idx):
+    """Process batch sequentially, writing each day to disk immediately."""
     parquet_paths = []
     current_tail = initial_tail
     label_counts = {0: 0, 1: 0, 2: 0}
@@ -547,20 +476,17 @@ def process_batch_sequential(zip_paths, initial_tail, temp_dir, start_file_idx):
         result = process_single_day(zip_path, current_tail, verbose=True)
         
         if result is not None:
-            df, current_tail, _ = result  # We don't need boundary_raw for sequential
+            df, current_tail, _ = result
             
-            # Count labels
             total_rows += len(df)
             for lv in [0, 1, 2]:
                 label_counts[lv] += (df['label'] == lv).sum()
             
-            # Write immediately to disk
             file_idx = start_file_idx + i
-            path = temp_dir / f"day_{file_idx:04d}.parquet"
+            path = output_dir / f"day_{file_idx:04d}.parquet"
             df.to_parquet(path, engine='pyarrow', compression='snappy', index=False)
             parquet_paths.append(path)
             
-            # Free memory
             del df
             gc.collect()
         else:
@@ -569,30 +495,272 @@ def process_batch_sequential(zip_paths, initial_tail, temp_dir, start_file_idx):
     return parquet_paths, current_tail, label_counts, total_rows
 
 
+def process_batch_for_parallel(args):
+    """Worker function for parallel batch processing."""
+    batch_idx, zip_paths = args
+    
+    results = []
+    boundary_raws = []
+    current_tail = None
+    
+    for zip_path in zip_paths:
+        result = process_single_day(zip_path, current_tail, verbose=True)
+        if result is not None:
+            df, current_tail, boundary_raw = result
+            results.append(df)
+            boundary_raws.append(boundary_raw)
+        else:
+            current_tail = None
+            boundary_raws.append(None)
+    
+    return batch_idx, results, current_tail, boundary_raws
+
+
+def recompute_initial_features(prev_tail_df, boundary_raw_df, current_result_df):
+    """Recompute features for boundary correction between parallel batches."""
+    if prev_tail_df is None or len(prev_tail_df) == 0:
+        return current_result_df
+    if boundary_raw_df is None or len(boundary_raw_df) == 0:
+        return current_result_df
+    
+    combined_raw = pd.concat([prev_tail_df, boundary_raw_df], ignore_index=True)
+    tail_len = len(prev_tail_df)
+    
+    recomputed = compute_features_time_based(combined_raw, verbose=False)
+    recomputed_boundary = recomputed.iloc[tail_len:].copy()
+    recomputed_boundary = recomputed_boundary[recomputed_boundary['label'] != -1].copy()
+    recomputed_boundary = recomputed_boundary.dropna()
+    
+    if len(recomputed_boundary) == 0:
+        return current_result_df
+    
+    recomputed_timestamps = set(recomputed_boundary['timestamp'].values)
+    mask = ~current_result_df['timestamp'].isin(recomputed_timestamps)
+    result_without_boundary = current_result_df[mask]
+    
+    corrected = pd.concat([recomputed_boundary, result_without_boundary], ignore_index=True)
+    corrected = corrected.sort_values('timestamp').reset_index(drop=True)
+    
+    return corrected
+
+
+# =============================================================================
+# HYBRID MEMORY-AWARE BATCH PROCESSING
+# =============================================================================
+
+def process_batches_hybrid(zip_files, output_dir, num_workers):
+    """
+    Hybrid batch processor with RAM monitoring.
+    
+    - RAM < 85%: parallel mode
+    - RAM >= 85%: sequential mode with immediate disk writes
+    
+    Writes directly to output_dir (NO COMBINE STEP).
+    """
+    # Split into batches
+    batches = []
+    for batch_start in range(0, len(zip_files), BATCH_SIZE):
+        batch_end = min(batch_start + BATCH_SIZE, len(zip_files))
+        batch_files = zip_files[batch_start:batch_end]
+        batch_idx = batch_start // BATCH_SIZE
+        batches.append((batch_idx, list(batch_files)))
+    
+    total_batches = len(batches)
+    print(f"\n[HYBRID] Processing {total_batches} batches with up to {num_workers} workers")
+    log_ram_status("[HYBRID] Initial ")
+    
+    # Tracking
+    all_parquet_paths = []
+    label_distribution = {0: 0, 1: 0, 2: 0}
+    total_rows = 0
+    file_idx = 0
+    
+    # Parallel tracking
+    pending_async_results = []
+    parallel_results = {}
+    
+    # Tail continuity
+    sequential_tail = None
+    last_processed_batch_idx = -1
+    
+    # Stats
+    parallel_batches = 0
+    sequential_batches = 0
+    
+    # Create pool
+    pool = None
+    if HAS_PSUTIL and num_workers > 1:
+        pool = mp.Pool(processes=num_workers)
+    
+    try:
+        pbar = tqdm(total=total_batches, desc="Processing batches")
+        batch_queue_idx = 0
+        
+        while batch_queue_idx < total_batches or pending_async_results:
+            
+            # Collect completed parallel results
+            still_pending = []
+            for batch_idx, async_result in pending_async_results:
+                if async_result.ready():
+                    try:
+                        result = async_result.get(timeout=1)
+                        parallel_results[result[0]] = (result[1], result[2], result[3])
+                    except Exception as e:
+                        print(f"\n[ERROR] Batch {batch_idx} failed: {e}")
+                else:
+                    still_pending.append((batch_idx, async_result))
+            pending_async_results = still_pending
+            
+            # Process completed results in order -> write to disk
+            while last_processed_batch_idx + 1 in parallel_results:
+                next_idx = last_processed_batch_idx + 1
+                results, final_tail, boundary_raws = parallel_results.pop(next_idx)
+                
+                for day_idx, df in enumerate(results):
+                    if day_idx == 0 and sequential_tail is not None:
+                        boundary_raw = boundary_raws[day_idx] if boundary_raws else None
+                        df = recompute_initial_features(sequential_tail, boundary_raw, df)
+                    
+                    total_rows += len(df)
+                    for lv in [0, 1, 2]:
+                        label_distribution[lv] += (df['label'] == lv).sum()
+                    
+                    # Write directly to output directory
+                    path = output_dir / f"day_{file_idx:04d}.parquet"
+                    df.to_parquet(path, engine='pyarrow', compression='snappy', index=False)
+                    all_parquet_paths.append(path)
+                    file_idx += 1
+                
+                sequential_tail = final_tail
+                last_processed_batch_idx = next_idx
+                pbar.update(1)
+                
+                del results
+                gc.collect()
+            
+            # Submit new batches
+            if batch_queue_idx < total_batches:
+                ram_critical = is_ram_critical()
+                
+                if ram_critical or pool is None:
+                    # SEQUENTIAL MODE
+                    batch_idx, batch_files = batches[batch_queue_idx]
+                    print(f"\n[SEQUENTIAL] Batch {batch_idx + 1}/{total_batches} | RAM: {get_ram_usage_percent():.1f}%")
+                    
+                    # Wait for pending parallel tasks
+                    if pending_async_results:
+                        print(f"  Waiting for {len(pending_async_results)} pending tasks...")
+                        for pidx, async_result in pending_async_results:
+                            try:
+                                result = async_result.get(timeout=300)
+                                parallel_results[result[0]] = (result[1], result[2], result[3])
+                            except Exception as e:
+                                print(f"  [ERROR] Batch {pidx} failed: {e}")
+                        pending_async_results = []
+                        
+                        # Process all completed
+                        while last_processed_batch_idx + 1 in parallel_results:
+                            next_idx = last_processed_batch_idx + 1
+                            results, final_tail, boundary_raws = parallel_results.pop(next_idx)
+                            
+                            for day_idx, df in enumerate(results):
+                                if day_idx == 0 and sequential_tail is not None:
+                                    boundary_raw = boundary_raws[day_idx] if boundary_raws else None
+                                    df = recompute_initial_features(sequential_tail, boundary_raw, df)
+                                
+                                total_rows += len(df)
+                                for lv in [0, 1, 2]:
+                                    label_distribution[lv] += (df['label'] == lv).sum()
+                                
+                                path = output_dir / f"day_{file_idx:04d}.parquet"
+                                df.to_parquet(path, engine='pyarrow', compression='snappy', index=False)
+                                all_parquet_paths.append(path)
+                                file_idx += 1
+                            
+                            sequential_tail = final_tail
+                            last_processed_batch_idx = next_idx
+                            pbar.update(1)
+                            
+                            del results
+                            gc.collect()
+                    
+                    gc.collect()
+                    
+                    # Process sequentially
+                    paths, sequential_tail, batch_labels, batch_rows = \
+                        process_batch_sequential_with_disk_write(
+                            batch_files, sequential_tail, output_dir, file_idx
+                        )
+                    
+                    all_parquet_paths.extend(paths)
+                    file_idx += len(paths)
+                    total_rows += batch_rows
+                    for lv in [0, 1, 2]:
+                        label_distribution[lv] += batch_labels[lv]
+                    
+                    last_processed_batch_idx = batch_idx
+                    sequential_batches += 1
+                    batch_queue_idx += 1
+                    pbar.update(1)
+                    
+                    gc.collect()
+                    
+                elif len(pending_async_results) < num_workers:
+                    # PARALLEL MODE - submit if slots available
+                    batch_idx, batch_files = batches[batch_queue_idx]
+                    print(f"\n[PARALLEL] Batch {batch_idx + 1}/{total_batches} | RAM: {get_ram_usage_percent():.1f}%")
+                    
+                    async_result = pool.apply_async(
+                        process_batch_for_parallel,
+                        args=((batch_idx, batch_files),)
+                    )
+                    pending_async_results.append((batch_idx, async_result))
+                    parallel_batches += 1
+                    batch_queue_idx += 1
+                else:
+                    time.sleep(0.1)
+            else:
+                time.sleep(0.1)
+        
+        pbar.close()
+        
+    finally:
+        if pool is not None:
+            pool.close()
+            pool.join()
+    
+    print(f"\n[HYBRID] Complete: {parallel_batches} parallel + {sequential_batches} sequential")
+    log_ram_status("[HYBRID] Final ")
+    
+    return all_parquet_paths, label_distribution, total_rows
+
+
 # =============================================================================
 # MAIN PROCESSOR
 # =============================================================================
 
-def process_streaming(input_dir, output_file, delete_zips=False):
-    """Process all zips with time-based features."""
+def process_streaming(input_dir, output_dir):
+    """Process all zips with hybrid memory-aware batch processing."""
     print("=" * 80)
-    print("FULLY TIME-BASED PREPROCESSING (OPTIMIZED)")
+    print("HYBRID MEMORY-AWARE PREPROCESSING")
+    print("NO COMBINE STEP - Direct Daily Parquet Output")
     print("=" * 80)
     print(f"Input: {input_dir}")
-    print(f"Output: {output_file}")
+    print(f"Output: {output_dir}/")
     print(f"\nTime-Based Windows:")
-    print(f"  Look-ahead:        {LOOK_AHEAD_SECONDS} sec ({LOOK_AHEAD_SECONDS/60:.1f} min)")
-    print(f"  Volatility window: {VOLATILITY_WINDOW_SEC} sec ({VOLATILITY_WINDOW_SEC/60:.1f} min)")
-    print(f"  Volume window:     {VOLUME_WINDOW_SEC} sec ({VOLUME_WINDOW_SEC/60:.1f} min)")
-    print(f"  Stats window:      {ROLLING_STATS_WINDOW_SEC} sec ({ROLLING_STATS_WINDOW_SEC/60:.1f} min)")
-    print(f"\nLabeling Thresholds:")
-    print(f"  Z-Score:    {Z_SCORE_THRESHOLD}")
-    print(f"  Min Profit: {MIN_PROFIT_PCT*100:.3f}%")
+    print(f"  Look-ahead:        {LOOK_AHEAD_SECONDS}s ({LOOK_AHEAD_SECONDS/60:.1f} min)")
+    print(f"  Volatility window: {VOLATILITY_WINDOW_SEC}s ({VOLATILITY_WINDOW_SEC/60:.1f} min)")
+    print(f"  Volume window:     {VOLUME_WINDOW_SEC}s ({VOLUME_WINDOW_SEC/60:.1f} min)")
+    print(f"  Stats window:      {ROLLING_STATS_WINDOW_SEC}s ({ROLLING_STATS_WINDOW_SEC/60:.1f} min)")
+    print(f"\nLabeling:")
+    print(f"  Z-Score threshold: {Z_SCORE_THRESHOLD}")
+    print(f"  Min profit:        {MIN_PROFIT_PCT*100:.3f}%")
     print(f"\nPerformance:")
-    print(f"  Numba JIT:     {HAS_NUMBA}")
-    print(f"  Batch size:    {BATCH_SIZE} days")
-    print(f"  I/O threads:   {IO_THREADS}")
-    print(f"  Rolling functions: O(n) sliding window")
+    print(f"  Numba JIT:  {HAS_NUMBA}")
+    print(f"  psutil:     {HAS_PSUTIL}")
+    print(f"  Batch size: {BATCH_SIZE} days")
+    print(f"  Workers:    {NUM_WORKERS}")
+    print(f"  RAM threshold: {RAM_THRESHOLD_PERCENT}%")
     print("=" * 80 + "\n")
     
     zip_files = sorted(Path(input_dir).glob("*.zip"))
@@ -601,73 +769,55 @@ def process_streaming(input_dir, output_file, delete_zips=False):
     
     print(f"Found {len(zip_files)} zip files\n")
     
-    temp_dir = Path("./temp_daily_parquets")
-    temp_dir.mkdir(exist_ok=True)
+    # Create output directory
+    output_path = Path(output_dir)
+    output_path.mkdir(exist_ok=True)
     
-    total_rows = 0
-    label_distribution = {0: 0, 1: 0, 2: 0}
-    all_parquet_paths = []
-    
-    current_tail = None
-    file_idx = 0
-    
-    # Process in batches, writing each day to disk immediately
-    for batch_start in range(0, len(zip_files), BATCH_SIZE):
-        batch_end = min(batch_start + BATCH_SIZE, len(zip_files))
-        batch_files = zip_files[batch_start:batch_end]
-        
-        print(f"\n[Batch {batch_start//BATCH_SIZE + 1}] Processing days {batch_start+1}-{batch_end}...")
-        
-        # Process batch sequentially, writing to disk immediately
-        paths, current_tail, batch_labels, batch_rows = process_batch_sequential(
-            batch_files, current_tail, temp_dir, file_idx
-        )
-        
-        # Accumulate results
-        all_parquet_paths.extend(paths)
-        total_rows += batch_rows
-        for lv in [0, 1, 2]:
-            label_distribution[lv] += batch_labels[lv]
-        
-        file_idx += len(paths)
-        gc.collect()
+    # Process with hybrid approach
+    all_parquet_paths, label_distribution, total_rows = process_batches_hybrid(
+        zip_files, output_path, NUM_WORKERS
+    )
     
     if len(all_parquet_paths) == 0:
         raise Exception("No days processed successfully")
     
-    # Combine all days
-    print(f"\n\nCombining {len(all_parquet_paths)} files into single parquet...\n")
+    # Calculate total size
+    total_size_bytes = sum(p.stat().st_size for p in all_parquet_paths)
+    total_size_gb = total_size_bytes / 1e9
     
-    writer = None
-    for parquet_path in tqdm(all_parquet_paths, desc="Combining"):
-        table = pq.read_table(parquet_path)
-        
-        if writer is None:
-            writer = pq.ParquetWriter(output_file, table.schema, compression='snappy')
-        
-        writer.write_table(table)
-        del table
+    # Save metadata for downstream consumption
+    metadata = {
+        'total_rows': int(total_rows),
+        'total_files': len(all_parquet_paths),
+        'total_size_gb': round(total_size_gb, 2),
+        'label_distribution': {
+            'down': int(label_distribution[0]),
+            'neutral': int(label_distribution[1]),
+            'up': int(label_distribution[2])
+        },
+        'config': {
+            'look_ahead_seconds': LOOK_AHEAD_SECONDS,
+            'volatility_window_sec': VOLATILITY_WINDOW_SEC,
+            'z_score_threshold': Z_SCORE_THRESHOLD,
+            'min_profit_pct': MIN_PROFIT_PCT
+        },
+        'files': [p.name for p in sorted(all_parquet_paths)]
+    }
     
-    if writer:
-        writer.close()
-    
-    # Cleanup
-    for p in all_parquet_paths:
-        p.unlink()
-    temp_dir.rmdir()
+    metadata_file = output_path / "metadata.json"
+    with open(metadata_file, 'w') as f:
+        json.dump(metadata, f, indent=2)
     
     # Final stats
-    parquet_file = pq.ParquetFile(output_file)
-    actual_rows = parquet_file.metadata.num_rows
-    file_size = os.path.getsize(output_file) / 1e9
-    
     print("\n" + "=" * 80)
     print("PREPROCESSING COMPLETE")
     print("=" * 80)
-    print(f"Total rows: {actual_rows:,}")
-    print(f"File size: {file_size:.2f} GB")
+    print(f"Output: {output_dir}/")
+    print(f"Files: {len(all_parquet_paths)} daily parquets")
+    print(f"Total rows: {total_rows:,}")
+    print(f"Total size: {total_size_gb:.2f} GB")
     
-    print("\nFINAL LABEL DISTRIBUTION:")
+    print("\nLabel Distribution:")
     total = sum(label_distribution.values())
     for lv in [0, 1, 2]:
         count = label_distribution[lv]
@@ -675,19 +825,10 @@ def process_streaming(input_dir, output_file, delete_zips=False):
         label_name = ['DOWN', 'NEUTRAL', 'UP'][lv]
         print(f"  {label_name:>7}: {count:>12,} ({pct:>5.2f}%)")
     
-    target_achieved = (
-        10 <= label_distribution[0]/total*100 <= 25 and
-        50 <= label_distribution[1]/total*100 <= 80 and
-        10 <= label_distribution[2]/total*100 <= 25
-    )
+    print(f"\nMetadata: {metadata_file}")
+    print("=" * 80)
     
-    if target_achieved:
-        print("\n  [OK] Label distribution is in target range!")
-    else:
-        print("\n  [WARN] Label distribution outside target range.")
-        print("         Adjust Z_SCORE_THRESHOLD or MIN_PROFIT_PCT")
-    
-    print("\n" + "=" * 80)
+    return metadata
 
 
 # =============================================================================
@@ -699,16 +840,13 @@ def main():
     print(f"\nStart time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
     
     try:
-        process_streaming(INPUT_DIR, OUTPUT_FILE, DELETE_ZIPS_AFTER_PROCESSING)
+        metadata = process_streaming(INPUT_DIR, OUTPUT_DIR)
         
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
         
-        print(f"Duration: {duration:.1f} seconds ({duration/60:.1f} minutes)")
-        
-        pf = pq.ParquetFile(OUTPUT_FILE)
-        rows = pf.metadata.num_rows
-        print(f"Throughput: {rows/duration:,.0f} rows/second\n")
+        print(f"\nDuration: {duration:.1f} seconds ({duration/60:.1f} minutes)")
+        print(f"Throughput: {metadata['total_rows']/duration:,.0f} rows/second\n")
         
     except Exception as e:
         print("\n" + "=" * 80)
