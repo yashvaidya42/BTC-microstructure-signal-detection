@@ -1,0 +1,32 @@
+# Ignore everything
+*
+
+# Allow directories
+!*/
+
+# Allow python files
+!*.py
+
+# Allow specific non-py files
+!.gitignore
+!PROJECT_HISTORY.md
+!requirements.txt
+!live_dashboard.html
+!*.csv
+!*.json
+!*.pkl
+
+# Ignore bulky data
+*.npz
+*.zip
+*.parquet
+dataset_xgb_regression_v4/
+processed_daily_parquets_v4/
+data/*.zip
+
+# Ignore these folders entirely
+.venv/
+venv/
+__pycache__/
+backup_pre_fixes_2026-05-23/
+.claude/

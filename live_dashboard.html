@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTC Live Prediction</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg0:#0a0a0f;--bg1:#12121a;--bg2:#16161f;--bdr:#1e1e2e;--t1:#e8e8f0;--t2:#6e6e8a;--t3:#44445a;--green:#00e676;--red:#ff1744;--cyan:#00e5ff}
+body{background:var(--bg0);color:var(--t1);font-family:'JetBrains Mono',monospace;min-height:100vh;overflow-x:hidden}
+.header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid var(--bdr);background:var(--bg1)}
+.header-left{display:flex;align-items:center;gap:16px}
+.logo{font-weight:700;font-size:18px;letter-spacing:-0.5px}.logo span{color:var(--cyan)}
+.badge{display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:4px;font-size:11px;font-weight:500;background:rgba(0,230,118,0.08);color:var(--green);border:1px solid rgba(0,230,118,0.15)}
+.badge.off{background:rgba(255,23,68,0.08);color:var(--red);border-color:rgba(255,23,68,0.15)}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+.badge.off .dot{background:var(--red);animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+.hdr-r{display:flex;align-items:center;gap:20px}
+.hdr-s{text-align:right}.hdr-s .l{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:1px}.hdr-s .v{font-size:14px;font-weight:500;color:var(--t2)}
+.main{display:grid;grid-template-columns:1fr 310px;height:calc(100vh - 53px)}
+.chart-area{display:flex;flex-direction:column;border-right:1px solid var(--bdr)}
+.toolbar{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;border-bottom:1px solid var(--bdr);background:var(--bg1)}
+.pair{display:flex;align-items:baseline;gap:12px}
+.pair-name{font-size:20px;font-weight:600}
+.cur-price{font-size:24px;font-weight:700}
+.chg{font-size:13px;font-weight:500;padding:2px 8px;border-radius:3px}
+.chg.up{color:var(--green);background:rgba(0,230,118,0.08)}.chg.dn{color:var(--red);background:rgba(255,23,68,0.08)}
+.legend{display:flex;gap:20px;font-size:11px;color:var(--t2)}
+.leg-i{display:flex;align-items:center;gap:6px}
+.leg-actual{width:20px;height:2px;background:var(--t1);border-radius:1px}
+.leg-pred{width:20px;height:2px;background:repeating-linear-gradient(90deg,var(--cyan) 0 4px,transparent 4px 8px)}
+#chart-box{flex:1}
+.sidebar{display:flex;flex-direction:column;background:var(--bg1);overflow-y:auto}
+.sec{padding:14px 18px;border-bottom:1px solid var(--bdr)}
+.sec-t{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;color:var(--t3);margin-bottom:10px}
+.sig-card{background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;padding:14px}
+.sig-dir{font-size:28px;font-weight:700;line-height:1;margin-bottom:4px}
+.sig-dir.up{color:var(--green)}.sig-dir.dn{color:var(--red)}.sig-dir.wait{color:var(--t3)}
+.sig-mag{font-size:12px;color:var(--t2)}
+.sig-row{margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.sig-item .l{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:0.5px}
+.sig-item .v{font-size:15px;font-weight:600}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.st{background:var(--bg2);border:1px solid var(--bdr);border-radius:4px;padding:8px 10px}
+.st .l{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:3px}
+.st .v{font-size:16px;font-weight:600}
+.plog{display:flex;flex-direction:column;gap:3px;max-height:400px;overflow-y:auto}
+.plog-e{display:grid;grid-template-columns:70px 1fr 60px;gap:8px;padding:5px 8px;background:var(--bg2);border-radius:3px;font-size:11px;align-items:center}
+.plog-t{color:var(--t3)}.plog-p{color:var(--t2)}.plog-b{font-weight:600;text-align:right}
+.plog-b.up{color:var(--green)}.plog-b.dn{color:var(--red)}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--bdr);border-radius:2px}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="header-left">
+    <div class="logo">SNIPER<span>.</span>LIVE</div>
+    <div class="badge off" id="badge"><div class="dot"></div><span id="status-txt">DISCONNECTED</span></div>
+  </div>
+  <div class="hdr-r">
+    <div class="hdr-s"><div class="l">Buffer</div><div class="v" id="buf-n">&mdash;</div></div>
+    <div class="hdr-s"><div class="l">Span</div><div class="v" id="buf-s">&mdash;</div></div>
+    <div class="hdr-s"><div class="l">Predictions</div><div class="v" id="pred-n">0</div></div>
+  </div>
+</div>
+<div class="main">
+  <div class="chart-area">
+    <div class="toolbar">
+      <div class="pair">
+        <span class="pair-name">BTCUSDT</span>
+        <span class="cur-price" id="cur-price">&mdash;</span>
+        <span class="chg up" id="chg">&mdash;</span>
+      </div>
+      <div class="legend">
+        <div class="leg-i"><div class="leg-actual"></div><span>Actual</span></div>
+        <div class="leg-i"><div class="leg-pred"></div><span>Predicted (T+5m)</span></div>
+      </div>
+    </div>
+    <div id="chart-box"></div>
+  </div>
+  <div class="sidebar">
+    <div class="sec">
+      <div class="sec-t">Current Signal</div>
+      <div class="sig-card">
+        <div class="sig-dir wait" id="sig-dir">WAITING</div>
+        <div class="sig-mag" id="sig-mag">Awaiting first prediction...</div>
+        <div class="sig-row">
+          <div class="sig-item"><div class="l">Now</div><div class="v" id="sig-now">&mdash;</div></div>
+          <div class="sig-item"><div class="l">T+5m Target</div><div class="v" id="sig-tgt">&mdash;</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="sec">
+      <div class="sec-t">Live Stats</div>
+      <div class="stats">
+        <div class="st"><div class="l">Avg |BPS|</div><div class="v" id="s-avg">&mdash;</div></div>
+        <div class="st"><div class="l">Max |BPS|</div><div class="v" id="s-max">&mdash;</div></div>
+        <div class="st"><div class="l">Up / Down</div><div class="v" id="s-ratio">&mdash;</div></div>
+        <div class="st"><div class="l">Hit Rate</div><div class="v" id="s-hit">&mdash;</div></div>
+      </div>
+    </div>
+    <div class="sec" style="flex:1;min-height:0">
+      <div class="sec-t">Prediction Log</div>
+      <div class="plog" id="plog"></div>
+    </div>
+  </div>
+</div>
+<script>
+const WS_URL="ws://localhost:8765";
+let ws=null,chart=null,priceSeries=null,predSeries=null,reconTimer=null,predCount=0;
+const pendingPreds=[];
+let hits=0,checked=0,allBps=[],upCount=0,dnCount=0;
+const priceArr=[],predArr=[];
+
+function initChart(){
+  const c=document.getElementById("chart-box");
+  chart=LightweightCharts.createChart(c,{
+    width:c.clientWidth,height:c.clientHeight,
+    layout:{background:{type:"solid",color:"#0a0a0f"},textColor:"#6e6e8a",fontFamily:"JetBrains Mono",fontSize:11},
+    grid:{vertLines:{color:"#1a1a28"},horzLines:{color:"#1a1a28"}},
+    crosshair:{mode:LightweightCharts.CrosshairMode.Normal,vertLine:{color:"#44445a",width:1,style:2},horzLine:{color:"#44445a",width:1,style:2}},
+    rightPriceScale:{borderColor:"#1e1e2e",scaleMargins:{top:0.1,bottom:0.1}},
+    timeScale:{borderColor:"#1e1e2e",timeVisible:true,secondsVisible:true,rightOffset:30},
+    handleScale:{mouseWheel:true,pinch:true},handleScroll:{mouseWheel:true,pressedMouseMove:true}
+  });
+  priceSeries=chart.addLineSeries({color:"#e8e8f0",lineWidth:2,priceLineVisible:true,priceLineColor:"#e8e8f0",priceLineWidth:1,lastValueVisible:true});
+  predSeries=chart.addLineSeries({color:"#00e5ff",lineWidth:2,lineStyle:LightweightCharts.LineStyle.Dashed,priceLineVisible:false,lastValueVisible:true});
+  new ResizeObserver(e=>{for(const en of e)chart.applyOptions({width:en.contentRect.width,height:en.contentRect.height})}).observe(c);
+}
+
+function ms2t(ms){return Math.floor(ms/1000)}
+function fmtT(ms){return new Date(ms).toLocaleTimeString("en-US",{hour12:false})}
+function fmtP(p){return p.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}
+
+function addPrice(tMs,price){
+  const t=ms2t(tMs);
+  if(priceArr.length>0&&t<=priceArr[priceArr.length-1].time){priceArr[priceArr.length-1].value=price;priceSeries.update(priceArr[priceArr.length-1]);return}
+  const pt={time:t,value:price};priceArr.push(pt);priceSeries.update(pt);
+}
+function addPredPt(tMs,price){
+  const t=ms2t(tMs);
+  if(predArr.length>0&&t<=predArr[predArr.length-1].time){predArr[predArr.length-1].value=price;predSeries.update(predArr[predArr.length-1]);return}
+  const pt={time:t,value:price};predArr.push(pt);predSeries.update(pt);
+}
+
+function checkPreds(curPrice,curMs){
+  for(let i=pendingPreds.length-1;i>=0;i--){
+    const p=pendingPreds[i];
+    if(curMs>=p.tgtTime){
+      const aRet=(curPrice-p.pAtPred)/p.pAtPred;
+      const pRet=(p.predP-p.pAtPred)/p.pAtPred;
+      if(Math.abs(aRet)>0.0001){
+        if(Math.sign(aRet)===Math.sign(pRet))hits++;
+        checked++;
+      }
+      pendingPreds.splice(i,1);
+    }
+  }
+  if(checked>0)document.getElementById("s-hit").textContent=(hits/checked*100).toFixed(1)+"%";
+}
+
+function updateSig(price,pred){
+  const lr=pred.log_return,bps=Math.abs(lr)*10000,up=lr>0;
+  const d=document.getElementById("sig-dir");
+  d.textContent=up?"LONG":"SHORT";d.className="sig-dir "+(up?"up":"dn");
+  document.getElementById("sig-mag").textContent=bps.toFixed(1)+" bps predicted move";
+  document.getElementById("sig-now").textContent="$"+fmtP(price.price);
+  document.getElementById("sig-tgt").textContent="$"+fmtP(pred.price);
+  document.getElementById("cur-price").textContent="$"+fmtP(price.price);
+  const ch=document.getElementById("chg");
+  ch.textContent=(up?"+":"-")+bps.toFixed(1)+" bps";ch.className="chg "+(up?"up":"dn");
+  allBps.push(bps);
+  document.getElementById("s-avg").textContent=(allBps.reduce((a,b)=>a+b,0)/allBps.length).toFixed(1);
+  document.getElementById("s-max").textContent=Math.max(...allBps).toFixed(1);
+  if(up)upCount++;else dnCount++;
+  document.getElementById("s-ratio").textContent=upCount+"/"+dnCount;
+}
+
+function addLog(pred){
+  const log=document.getElementById("plog");
+  const lr=pred.log_return,bps=Math.abs(lr)*10000,up=lr>0;
+  const e=document.createElement("div");e.className="plog-e";
+  const timeStr=fmtT(pred.made_at);
+  const priceStr="$"+fmtP(pred.price);
+  const bpsStr=(up?"+":"-")+bps.toFixed(1);
+  const bpsCls=up?"up":"dn";
+  e.innerHTML='<span class="plog-t">'+timeStr+'</span><span class="plog-p">'+priceStr+'</span><span class="plog-b '+bpsCls+'">'+bpsStr+'</span>';
+  log.firstChild?log.insertBefore(e,log.firstChild):log.appendChild(e);
+  while(log.children.length>100)log.removeChild(log.lastChild);
+}
+
+function connect(){
+  if(ws&&(ws.readyState===0||ws.readyState===1))return;
+  ws=new WebSocket(WS_URL);
+  ws.onopen=()=>{document.getElementById("badge").className="badge";document.getElementById("status-txt").textContent="LIVE"};
+  ws.onclose=()=>{document.getElementById("badge").className="badge off";document.getElementById("status-txt").textContent="DISCONNECTED";clearTimeout(reconTimer);reconTimer=setTimeout(connect,3000)};
+  ws.onerror=()=>{};
+  ws.onmessage=(ev)=>{
+    const m=JSON.parse(ev.data);
+    if(m.type==="history"){
+      if(m.prices)for(const p of m.prices)addPrice(p.time,p.price);
+      if(m.predictions)for(const p of m.predictions)addPredPt(p.time,p.price);
+      chart.timeScale().scrollToRealTime();
+    }
+    if(m.type==="tick"){
+      const pr=m.price,pd=m.prediction;
+      addPrice(pr.time,pr.price);addPredPt(pd.time,pd.price);
+      pendingPreds.push({madeAt:pd.made_at,tgtTime:pd.time,predP:pd.price,pAtPred:pr.price});
+      checkPreds(pr.price,pr.time);
+      predCount++;
+      document.getElementById("pred-n").textContent=predCount;
+      document.getElementById("buf-n").textContent=m.buffer_size.toLocaleString();
+      document.getElementById("buf-s").textContent=Math.round(m.buffer_span_s)+"s";
+      updateSig(pr,pd);addLog(pd);
+      chart.timeScale().scrollToRealTime();
+    }
+  };
+}
+
+document.addEventListener("DOMContentLoaded",()=>{initChart();connect()});
+</script>
+</body>
+</html>
