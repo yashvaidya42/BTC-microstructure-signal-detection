@@ -22,7 +22,7 @@
 *.parquet
 dataset_xgb_regression_v4/
 processed_daily_parquets_v4/
-data/*.zip
+btc_trade_data/*.zip
 
 # Ignore these folders entirely
 .venv/
