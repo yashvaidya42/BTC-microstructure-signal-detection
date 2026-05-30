@@ -1,5 +1,5 @@
 {
-  "started": "2026-05-31T03:29:53.566932",
+  "started": "2026-05-31T03:44:17.464795",
   "optuna_trials": [
     {
       "number": 0,
@@ -909,7 +909,7 @@
     "max_bin": 128,
     "mode": "single-gpu (NVIDIA GeForce RTX 3050 Laptop GPU)",
     "n_gpus": 1,
-    "total_vram_mb": 3503
+    "total_vram_mb": 3286
   },
   "keep_idx": [
     0,
@@ -959,5 +959,5 @@
     "pred_mean": 1.0349011745347525e-06,
     "pred_std": 4.305145557736978e-05
   },
-  "finished": "2026-05-31T03:31:10.788423"
+  "finished": "2026-05-31T03:45:35.593865"
 }
