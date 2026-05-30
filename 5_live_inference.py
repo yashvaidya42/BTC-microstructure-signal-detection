@@ -63,10 +63,17 @@ except ImportError:
 # =============================================================================
 
 # --- Model Artifacts (V4) ---
-BASE_DIR    = Path(r"D:\ml\quant_ML_model")
-MODEL_PATH  = str(BASE_DIR / "model_output_xgb_v4" / "model_sniper_v4.json")
-SCALER_PATH = str(BASE_DIR / "model_output_xgb_v4" / "scaler_regression_v4.pkl")
-KEEPIDX_PATH = str(BASE_DIR / "model_output_xgb_v4" / "keep_idx.pkl")
+# BTC_BASE_DIR env var lets the same script run on both Windows (local) and
+# Linux (server) without modification. Systemd sets it to /home/ubuntu/btc_model.
+BASE_DIR     = Path(os.environ.get('BTC_BASE_DIR', str(Path(__file__).resolve().parent)))
+MODEL_PATH   = os.environ.get('BTC_MODEL_PATH',
+                   str(BASE_DIR / "model_output_xgb_v4" / "model_sniper_v4.json"))
+SCALER_PATH  = os.environ.get('BTC_SCALER_PATH',
+                   str(BASE_DIR / "model_output_xgb_v4" / "scaler_regression_v4.pkl"))
+KEEPIDX_PATH = os.environ.get('BTC_KEEPIDX_PATH',
+                   str(BASE_DIR / "model_output_xgb_v4" / "keep_idx.pkl"))
+GATE_CONFIG_PATH = os.environ.get('BTC_GATE_CONFIG_PATH',
+                   str(BASE_DIR / "model_output_xgb_v4" / "gate_config.json"))
 
 # --- Binance ---
 BINANCE_WS_URL   = "wss://stream.binance.com:9443/ws/btcusdt@trade"
@@ -86,7 +93,7 @@ MIN_BUFFER_SPAN_SEC    = 900  # Need 15 min for SMA trend feature
 RUN_DURATION_MINUTES = 0
 
 # --- Dashboard Server ---
-DASHBOARD_HOST = "localhost"
+DASHBOARD_HOST = "0.0.0.0"
 DASHBOARD_PORT = 8765
 
 # --- Logging ---
@@ -624,12 +631,14 @@ class PredictionLogger:
             'wall_clock', 'timestamp_ms', 'current_price',
             'predicted_price_5m', 'pred_log_return', 'pred_bps',
             'direction', 'buffer_ticks', 'buffer_span_s',
+            'gate_decision', 'rejection_reason',
         ])
         self._file.flush()
         self.count = 0
 
     def log(self, timestamp_ms, current_price, predicted_price,
-            pred_lr, buffer_size, buffer_span):
+            pred_lr, buffer_size, buffer_span,
+            gate_decision, rejection_reason):
         bps = abs(pred_lr) * 10000
         direction = "UP" if pred_lr > 0 else "DN"
         self._writer.writerow([
@@ -642,6 +651,8 @@ class PredictionLogger:
             direction,
             buffer_size,
             f"{buffer_span:.0f}",
+            gate_decision,
+            rejection_reason if rejection_reason else '',
         ])
         self.count += 1
         if self.count % 10 == 0:
@@ -746,6 +757,7 @@ RESOLVED_CSV_COLUMNS = [
     'wall_clock', 'timestamp_ms', 'current_price',
     'predicted_price_5m', 'pred_log_return', 'pred_bps',
     'direction', 'buffer_ticks', 'buffer_span_s',
+    'gate_decision', 'rejection_reason',
     'realized_return', 'price_at_t_plus_5', 'correct_direction', 'abs_error_bps',
 ]
 
@@ -780,6 +792,8 @@ class ResolvedLogger:
             original_row['direction'],
             original_row['buffer_ticks'],
             original_row['buffer_span_s'],
+            original_row.get('gate_decision', ''),
+            original_row.get('rejection_reason', ''),
             f"{realized_return:.10f}",
             f"{price_at_t_plus_5:.2f}",
             correct_direction,
@@ -803,6 +817,7 @@ def write_unresolved_csv(filepath, pending_predictions):
             'wall_clock', 'timestamp_ms', 'current_price',
             'predicted_price_5m', 'pred_log_return', 'pred_bps',
             'direction', 'buffer_ticks', 'buffer_span_s',
+            'gate_decision', 'rejection_reason',
         ])
         for entry in pending_predictions:
             row = entry['row']
@@ -811,6 +826,7 @@ def write_unresolved_csv(filepath, pending_predictions):
                 row['predicted_price_5m'], f"{row['pred_log_return']:.10f}",
                 row['pred_bps'], row['direction'],
                 row['buffer_ticks'], row['buffer_span_s'],
+                row.get('gate_decision', ''), row.get('rejection_reason', ''),
             ])
     print(f"[SHUTDOWN] {len(pending_predictions)} unresolved predictions saved: {filepath}")
 
@@ -841,8 +857,7 @@ class LiveEngine:
         self._unresolved_path = None
         self.stats = LiveStatsTracker()
 
-        gate_config_path = str(BASE_DIR / "model_output_xgb_v4" / "gate_config.json")
-        self.regime_gate = RegimeGate(gate_config_path)
+        self.regime_gate = RegimeGate(GATE_CONFIG_PATH)
 
     def load_artifacts(self):
         print("[MODEL] Loading V4 artifacts...")
@@ -903,7 +918,8 @@ class LiveEngine:
         return current_price, predicted_price, pred_log_return, timestamp_ms, should_trade, rejection_reason, gate_details
 
     def _enqueue_prediction(self, timestamp_ms, current_price, predicted_price,
-                            pred_lr, buffer_size, buffer_span):
+                            pred_lr, buffer_size, buffer_span,
+                            gate_decision, rejection_reason):
         bps = abs(pred_lr) * 10000
         direction = "UP" if pred_lr > 0 else "DN"
         entry = {
@@ -919,6 +935,8 @@ class LiveEngine:
                 'direction': direction,
                 'buffer_ticks': buffer_size,
                 'buffer_span_s': f"{buffer_span:.0f}",
+                'gate_decision': gate_decision,
+                'rejection_reason': rejection_reason if rejection_reason else '',
             },
         }
         with self._pending_lock:
@@ -1084,17 +1102,21 @@ class LiveEngine:
                         'buffer_span_s': round(self.buffer.time_span_seconds, 0),
                     })
 
+                    gate_decision = "TRADE" if should_trade else "SKIP"
+
                     if self.pred_logger:
                         self.pred_logger.log(
                             timestamp_ms, current_price, predicted_price,
                             pred_lr, len(self.buffer),
                             self.buffer.time_span_seconds,
+                            gate_decision, rejection_reason,
                         )
 
                     self._enqueue_prediction(
                         timestamp_ms, current_price, predicted_price,
                         pred_lr, len(self.buffer),
                         self.buffer.time_span_seconds,
+                        gate_decision, rejection_reason,
                     )
 
                     direction = "UP" if pred_lr > 0 else "DN"

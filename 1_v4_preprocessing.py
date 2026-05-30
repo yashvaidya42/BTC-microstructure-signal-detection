@@ -61,7 +61,7 @@ except ImportError:
 # CONFIGURATION
 # =============================================================================
 
-INPUT_DIR  = "./btc_trade_data"
+INPUT_DIR  = "./btc_trade_data/2026"
 OUTPUT_DIR = "./processed_daily_parquets_v4"
 
 # --- Regression Target ---

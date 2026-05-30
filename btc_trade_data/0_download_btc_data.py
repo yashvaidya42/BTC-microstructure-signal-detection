@@ -18,7 +18,6 @@ import json
 BASE_URL = "https://data.binance.vision/"
 SYMBOL = "BTCUSDT"
 YEAR = 2026
-OUTPUT_DIR = "./btc_trades_2021"
 
 def download_file(url, save_path):
     """Download file with progress bar"""
@@ -60,7 +59,7 @@ def download_file(url, save_path):
 
 def main():
     # --- Configuration ---
-    BASE_OUTPUT_DIR = "."
+    BASE_OUTPUT_DIR = "./btc_trade_data"
     START_YEAR = 2026  
     END_YEAR = 2026    
     

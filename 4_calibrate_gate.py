@@ -17,7 +17,7 @@ from itertools import product
 # Paths — same as training script
 DATASET_DIR  = "./dataset_xgb_regression_v4"
 MODEL_PATH   = "./model_output_xgb_v4/model_sniper_v4.json"
-SCALER_PATH  = "./scaler_regression_v4.pkl"
+SCALER_PATH  = "./model_output_xgb_v4/scaler_regression_v4.pkl"
 KEEPIDX_PATH = "./model_output_xgb_v4/keep_idx.pkl"
 OUTPUT_PATH  = "./model_output_xgb_v4/gate_config.json"
 
