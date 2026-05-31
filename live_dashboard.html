@@ -284,6 +284,24 @@ function updateRuntime(){
 }
 setInterval(updateRuntime,10000);
 
+function applyStats(stats){
+  if(!stats)return;
+  
+  hits=stats.all_correct||0;
+  checked=(stats.all_correct||0)+(stats.all_wrong||0);
+  totalPnlBps=stats.cum_pnl_bps||0;
+  tradeCount=stats.trade_count||0;
+  skipCount=stats.skip_count||0;
+  
+  if(stats.start_time)startTime=stats.start_time;
+  
+  document.getElementById("vm-trades").textContent=checked;
+  document.getElementById("s-gate").textContent=tradeCount+"/"+(tradeCount+skipCount);
+  
+  updateVerdict();
+  updateRuntime();
+}
+
 function updateVerdict(){
   const icon=document.getElementById("verdict-icon");
   const title=document.getElementById("verdict-title");
@@ -298,6 +316,8 @@ function updateVerdict(){
     sub.textContent="Need more resolved predictions to evaluate model";
     accEl.className="val wait";accEl.textContent="...";
     edgeEl.className="val wait";edgeEl.textContent="...";
+    pnlEl.textContent=(totalPnlBps>=0?"+":"")+totalPnlBps.toFixed(1);
+    pnlEl.className="val neutral";
     return;
   }
 
@@ -307,7 +327,6 @@ function updateVerdict(){
   edgeEl.textContent=(edge>=0?"+":"")+edge.toFixed(1)+"%";
   pnlEl.textContent=(totalPnlBps>=0?"+":"")+totalPnlBps.toFixed(1);
 
-  // Update accuracy bar
   const bar=document.getElementById("acc-bar");
   bar.style.width=Math.max(5,Math.min(95,acc))+"%";
   bar.textContent=acc.toFixed(1)+"%";
@@ -343,27 +362,6 @@ function updateVerdict(){
   }
 }
 
-function checkPreds(curPrice,curMs){
-  for(let i=pendingPreds.length-1;i>=0;i--){
-    const p=pendingPreds[i];
-    if(curMs>=p.tgtTime){
-      const aRet=(curPrice-p.pAtPred)/p.pAtPred;
-      const pRet=(p.predP-p.pAtPred)/p.pAtPred;
-      if(Math.abs(aRet)>0.00005){
-        const correct=Math.sign(aRet)===Math.sign(pRet);
-        if(correct)hits++;
-        checked++;
-        // PnL: if we followed the signal, did we profit?
-        const pnl=Math.sign(pRet)*aRet*10000; // in bps
-        totalPnlBps+=pnl;
-      }
-      pendingPreds.splice(i,1);
-    }
-  }
-  document.getElementById("vm-trades").textContent=checked;
-  updateVerdict();
-}
-
 function updateSig(price,pred){
   const lr=pred.log_return,bps=Math.abs(lr)*10000,up=lr>0;
   const shouldTrade=pred.should_trade;
@@ -377,12 +375,9 @@ function updateSig(price,pred){
   const gate=document.getElementById("sig-gate");
   if(shouldTrade){
     gate.textContent="TRADE";gate.className="signal-gate trade";
-    tradeCount++;
   } else {
     gate.textContent="SKIP";gate.className="signal-gate skip";
-    skipCount++;
   }
-  document.getElementById("s-gate").textContent=tradeCount+"/"+(tradeCount+skipCount);
   
   document.getElementById("cur-price").textContent="$"+fmtP(price.price);
   const ch=document.getElementById("chg");
@@ -414,7 +409,6 @@ function connect(){
   ws.onopen=()=>{
     document.getElementById("badge").className="conn-badge on";
     document.getElementById("status-txt").textContent="LIVE";
-    if(!startTime)startTime=Date.now();
   };
   ws.onclose=()=>{
     document.getElementById("badge").className="conn-badge off";
@@ -425,19 +419,51 @@ function connect(){
   ws.onmessage=(ev)=>{
     const m=JSON.parse(ev.data);
     if(m.type==="history"){
+      // Load server-side cumulative stats
+      if(m.stats)applyStats(m.stats);
+      
       if(m.prices)for(const p of m.prices)addPrice(p.time,p.price);
-      if(m.predictions)for(const p of m.predictions)addPredPt(p.time,p.price);
+      if(m.predictions){
+        predCount=m.predictions.length;
+        document.getElementById("pred-n").textContent=predCount;
+        for(const p of m.predictions){
+          addPredPt(p.time,p.price);
+          // Rebuild sidebar stats from history
+          if(p.log_return!==undefined){
+            const bps=Math.abs(p.log_return)*10000;
+            const up=p.log_return>0;
+            allBps.push(bps);
+            if(up)upCount++;else dnCount++;
+            if(p.should_trade)tradeCount++;else skipCount++;
+          }
+        }
+        // Update sidebar with historical data
+        if(allBps.length>0){
+          document.getElementById("s-avg").textContent=(allBps.reduce((a,b)=>a+b,0)/allBps.length).toFixed(1)+" bps";
+          document.getElementById("s-max").textContent=Math.max(...allBps).toFixed(1)+" bps";
+          document.getElementById("s-ratio").textContent=upCount+" up / "+dnCount+" dn";
+          document.getElementById("s-gate").textContent=tradeCount+"/"+(tradeCount+skipCount);
+        }
+        // Show last prediction as current signal
+        if(m.predictions.length>0){
+          const lastPred=m.predictions[m.predictions.length-1];
+          const lastPrice=m.prices&&m.prices.length>0?m.prices[m.prices.length-1]:{price:0};
+          updateSig(lastPrice,lastPred);
+        }
+      }
       chart.timeScale().scrollToRealTime();
     }
     if(m.type==="tick"){
       const pr=m.price,pd=m.prediction;
       addPrice(pr.time,pr.price);addPredPt(pd.time,pd.price);
-      pendingPreds.push({madeAt:pd.made_at,tgtTime:pd.time,predP:pd.price,pAtPred:pr.price});
-      checkPreds(pr.price,pr.time);
       predCount++;
       document.getElementById("pred-n").textContent=predCount;
       if(m.buffer_size)document.getElementById("buf-n").textContent=m.buffer_size.toLocaleString();
       if(m.buffer_span_s)document.getElementById("buf-s").textContent=Math.round(m.buffer_span_s)+"s";
+      
+      // Use server stats instead of client-side tracking
+      if(m.stats)applyStats(m.stats);
+      
       updateSig(pr,pd);addLog(pd);
       chart.timeScale().scrollToRealTime();
       updateRuntime();

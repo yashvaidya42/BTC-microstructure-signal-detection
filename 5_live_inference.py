@@ -1002,6 +1002,18 @@ class LiveEngine:
                 'type': 'history',
                 'prices': list(self.price_history),
                 'predictions': list(self.prediction_history),
+                'stats': {
+                    'all_correct': self.stats.all_correct,
+                    'all_wrong': self.stats.all_wrong,
+                    'all_flat': self.stats.all_flat,
+                    'cum_pnl_bps': round(self.stats.cum_pnl_bps, 2),
+                    'indep_correct': self.stats.indep_correct,
+                    'indep_wrong': self.stats.indep_wrong,
+                    'indep_pnl_bps': round(self.stats.indep_pnl_bps, 2),
+                    'trade_count': self.regime_gate.trades_passed,
+                    'skip_count': self.regime_gate.total_predictions - self.regime_gate.trades_passed,
+                    'start_time': int(self.start_time * 1000) if self.start_time else None,
+                },
             }
             await websocket.send(json.dumps(history_msg))
             async for _ in websocket:
@@ -1100,6 +1112,17 @@ class LiveEngine:
                         'prediction': pred_point,
                         'buffer_size': len(self.buffer),
                         'buffer_span_s': round(self.buffer.time_span_seconds, 0),
+                        'stats': {
+                            'all_correct': self.stats.all_correct,
+                            'all_wrong': self.stats.all_wrong,
+                            'all_flat': self.stats.all_flat,
+                            'cum_pnl_bps': round(self.stats.cum_pnl_bps, 2),
+                            'indep_correct': self.stats.indep_correct,
+                            'indep_wrong': self.stats.indep_wrong,
+                            'indep_pnl_bps': round(self.stats.indep_pnl_bps, 2),
+                            'trade_count': self.regime_gate.trades_passed,
+                            'skip_count': self.regime_gate.total_predictions - self.regime_gate.trades_passed,
+                        },
                     })
 
                     gate_decision = "TRADE" if should_trade else "SKIP"
