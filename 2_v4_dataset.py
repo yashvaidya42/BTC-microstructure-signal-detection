@@ -39,9 +39,9 @@ OUTPUT_DIR  = "./dataset_xgb_regression_v4"
 SCALER_FILE = "./scaler_regression_v4.pkl"
 
 # Chronological splits (70% Train, 15% Val, 15% Test)
-TRAIN_SPLIT = 0.80
+TRAIN_SPLIT = 0.70
 VAL_SPLIT   = 0.15
-TEST_SPLIT  = 0.05
+TEST_SPLIT  = 0.15
 
 # SMART SCHEDULER CONFIG (i5-11400H, 16 GB RAM)
 TARGET_BATCH_MB       = 25

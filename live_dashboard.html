@@ -3,136 +3,266 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BTC Live Prediction</title>
+<title>BTC Signal Monitor</title>
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box}
-:root{--bg0:#0a0a0f;--bg1:#12121a;--bg2:#16161f;--bdr:#1e1e2e;--t1:#e8e8f0;--t2:#6e6e8a;--t3:#44445a;--green:#00e676;--red:#ff1744;--cyan:#00e5ff}
-body{background:var(--bg0);color:var(--t1);font-family:'JetBrains Mono',monospace;min-height:100vh;overflow-x:hidden}
-.header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid var(--bdr);background:var(--bg1)}
-.header-left{display:flex;align-items:center;gap:16px}
-.logo{font-weight:700;font-size:18px;letter-spacing:-0.5px}.logo span{color:var(--cyan)}
-.badge{display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:4px;font-size:11px;font-weight:500;background:rgba(0,230,118,0.08);color:var(--green);border:1px solid rgba(0,230,118,0.15)}
-.badge.off{background:rgba(255,23,68,0.08);color:var(--red);border-color:rgba(255,23,68,0.15)}
-.dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
-.badge.off .dot{background:var(--red);animation:none}
+:root{
+  --bg0:#080810;--bg1:#0e0e18;--bg2:#141420;--bg3:#1a1a2a;
+  --bdr:#1e1e30;--bdr2:#2a2a3e;
+  --t1:#e4e4f0;--t2:#8888a8;--t3:#55557a;--t4:#33334a;
+  --green:#00dc82;--green-bg:rgba(0,220,130,0.06);--green-bdr:rgba(0,220,130,0.15);
+  --red:#ff4466;--red-bg:rgba(255,68,102,0.06);--red-bdr:rgba(255,68,102,0.15);
+  --amber:#ffaa00;--amber-bg:rgba(255,170,0,0.06);--amber-bdr:rgba(255,170,0,0.15);
+  --cyan:#00c8ff;--cyan-bg:rgba(0,200,255,0.06);--cyan-bdr:rgba(0,200,255,0.15);
+  --blue:#4488ff;
+}
+body{background:var(--bg0);color:var(--t1);font-family:'IBM Plex Sans',sans-serif;min-height:100vh;overflow-x:hidden}
+.mono{font-family:'IBM Plex Mono',monospace}
+
+/* HEADER */
+.header{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid var(--bdr);background:var(--bg1)}
+.header-left{display:flex;align-items:center;gap:14px}
+.logo{font-weight:700;font-size:16px;letter-spacing:0.5px;color:var(--t2)}
+.logo span{color:var(--cyan)}
+.conn-badge{display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:3px;font-size:10px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase}
+.conn-badge.on{background:var(--green-bg);color:var(--green);border:1px solid var(--green-bdr)}
+.conn-badge.off{background:var(--red-bg);color:var(--red);border:1px solid var(--red-bdr)}
+.dot{width:5px;height:5px;border-radius:50%}
+.conn-badge.on .dot{background:var(--green);animation:pulse 2s infinite}
+.conn-badge.off .dot{background:var(--red)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-.hdr-r{display:flex;align-items:center;gap:20px}
-.hdr-s{text-align:right}.hdr-s .l{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:1px}.hdr-s .v{font-size:14px;font-weight:500;color:var(--t2)}
-.main{display:grid;grid-template-columns:1fr 310px;height:calc(100vh - 53px)}
+.hdr-stats{display:flex;gap:24px}
+.hdr-stat{text-align:right}
+.hdr-stat .label{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;font-weight:600}
+.hdr-stat .val{font-size:13px;font-weight:600;color:var(--t2);font-family:'IBM Plex Mono',monospace}
+
+/* VERDICT BANNER */
+.verdict-bar{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;border-bottom:1px solid var(--bdr);gap:16px}
+.verdict-main{display:flex;align-items:center;gap:12px}
+.verdict-icon{width:32px;height:32px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700}
+.verdict-icon.good{background:var(--green-bg);border:1px solid var(--green-bdr);color:var(--green)}
+.verdict-icon.bad{background:var(--red-bg);border:1px solid var(--red-bdr);color:var(--red)}
+.verdict-icon.wait{background:var(--amber-bg);border:1px solid var(--amber-bdr);color:var(--amber)}
+.verdict-text .title{font-size:13px;font-weight:700;letter-spacing:0.3px}
+.verdict-text .sub{font-size:11px;color:var(--t2);margin-top:1px}
+.verdict-metrics{display:flex;gap:20px}
+.vm{text-align:center;padding:4px 12px;background:var(--bg2);border:1px solid var(--bdr);border-radius:4px;min-width:80px}
+.vm .label{font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;font-weight:600}
+.vm .val{font-size:16px;font-weight:700;font-family:'IBM Plex Mono',monospace;margin-top:2px}
+.vm .val.good{color:var(--green)}.vm .val.bad{color:var(--red)}.vm .val.neutral{color:var(--t2)}.vm .val.wait{color:var(--amber)}
+
+/* MAIN LAYOUT */
+.main{display:grid;grid-template-columns:1fr 300px;height:calc(100vh - 93px)}
+
+/* CHART */
 .chart-area{display:flex;flex-direction:column;border-right:1px solid var(--bdr)}
-.toolbar{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;border-bottom:1px solid var(--bdr);background:var(--bg1)}
-.pair{display:flex;align-items:baseline;gap:12px}
-.pair-name{font-size:20px;font-weight:600}
-.cur-price{font-size:24px;font-weight:700}
-.chg{font-size:13px;font-weight:500;padding:2px 8px;border-radius:3px}
-.chg.up{color:var(--green);background:rgba(0,230,118,0.08)}.chg.dn{color:var(--red);background:rgba(255,23,68,0.08)}
-.legend{display:flex;gap:20px;font-size:11px;color:var(--t2)}
-.leg-i{display:flex;align-items:center;gap:6px}
-.leg-actual{width:20px;height:2px;background:var(--t1);border-radius:1px}
-.leg-pred{width:20px;height:2px;background:repeating-linear-gradient(90deg,var(--cyan) 0 4px,transparent 4px 8px)}
+.toolbar{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-bottom:1px solid var(--bdr);background:var(--bg1)}
+.pair{display:flex;align-items:baseline;gap:10px}
+.pair-name{font-size:16px;font-weight:700;color:var(--t2)}
+.cur-price{font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace}
+.chg{font-size:12px;font-weight:600;padding:2px 8px;border-radius:3px;font-family:'IBM Plex Mono',monospace}
+.chg.up{color:var(--green);background:var(--green-bg)}.chg.dn{color:var(--red);background:var(--red-bg)}
+.legend{display:flex;gap:16px;font-size:10px;color:var(--t3);font-weight:500}
+.leg-i{display:flex;align-items:center;gap:5px}
+.leg-line{width:16px;height:2px;border-radius:1px}
+.leg-actual{background:var(--t1)}
+.leg-pred{background:repeating-linear-gradient(90deg,var(--cyan) 0 3px,transparent 3px 6px)}
 #chart-box{flex:1}
+
+/* SIDEBAR */
 .sidebar{display:flex;flex-direction:column;background:var(--bg1);overflow-y:auto}
-.sec{padding:14px 18px;border-bottom:1px solid var(--bdr)}
-.sec-t{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;color:var(--t3);margin-bottom:10px}
-.sig-card{background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;padding:14px}
-.sig-dir{font-size:28px;font-weight:700;line-height:1;margin-bottom:4px}
-.sig-dir.up{color:var(--green)}.sig-dir.dn{color:var(--red)}.sig-dir.wait{color:var(--t3)}
-.sig-mag{font-size:12px;color:var(--t2)}
-.sig-row{margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.sig-item .l{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:0.5px}
-.sig-item .v{font-size:15px;font-weight:600}
-.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.st{background:var(--bg2);border:1px solid var(--bdr);border-radius:4px;padding:8px 10px}
-.st .l{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:3px}
-.st .v{font-size:16px;font-weight:600}
-.plog{display:flex;flex-direction:column;gap:3px;max-height:400px;overflow-y:auto}
-.plog-e{display:grid;grid-template-columns:70px 1fr 60px;gap:8px;padding:5px 8px;background:var(--bg2);border-radius:3px;font-size:11px;align-items:center}
-.plog-t{color:var(--t3)}.plog-p{color:var(--t2)}.plog-b{font-weight:600;text-align:right}
-.plog-b.up{color:var(--green)}.plog-b.dn{color:var(--red)}
-::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--bdr);border-radius:2px}
+.sec{padding:12px 16px;border-bottom:1px solid var(--bdr)}
+.sec-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--t3);margin-bottom:8px}
+
+/* SIGNAL CARD */
+.signal-card{background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;padding:12px;position:relative}
+.signal-direction{font-size:24px;font-weight:700;line-height:1}
+.signal-direction.up{color:var(--green)}.signal-direction.dn{color:var(--red)}.signal-direction.wait{color:var(--t3)}
+.signal-sub{font-size:11px;color:var(--t2);margin-top:4px}
+.signal-gate{position:absolute;top:12px;right:12px;font-size:9px;font-weight:700;padding:3px 8px;border-radius:3px;letter-spacing:0.5px;text-transform:uppercase}
+.signal-gate.trade{background:var(--green-bg);color:var(--green);border:1px solid var(--green-bdr)}
+.signal-gate.skip{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-bdr)}
+.signal-prices{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px}
+.signal-prices .sp{background:var(--bg0);border-radius:3px;padding:6px 8px}
+.signal-prices .sp .label{font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:0.8px;font-weight:600}
+.signal-prices .sp .val{font-size:14px;font-weight:600;font-family:'IBM Plex Mono',monospace;margin-top:2px}
+
+/* ACCURACY METER */
+.accuracy-section{display:flex;flex-direction:column;gap:8px}
+.acc-bar-wrap{position:relative;height:28px;background:var(--bg0);border-radius:4px;border:1px solid var(--bdr);overflow:hidden}
+.acc-bar-fill{height:100%;border-radius:3px;transition:width 0.5s ease;display:flex;align-items:center;justify-content:flex-end;padding-right:8px;font-size:11px;font-weight:700;font-family:'IBM Plex Mono',monospace}
+.acc-bar-fill.good{background:linear-gradient(90deg,rgba(0,220,130,0.15),rgba(0,220,130,0.3));color:var(--green)}
+.acc-bar-fill.bad{background:linear-gradient(90deg,rgba(255,68,102,0.15),rgba(255,68,102,0.3));color:var(--red)}
+.acc-bar-fill.neutral{background:linear-gradient(90deg,rgba(136,136,168,0.1),rgba(136,136,168,0.2));color:var(--t2)}
+.acc-baseline{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--amber);z-index:2}
+.acc-baseline-label{position:absolute;left:50%;top:-16px;transform:translateX(-50%);font-size:8px;color:var(--amber);font-weight:600;letter-spacing:0.5px;white-space:nowrap}
+.acc-labels{display:flex;justify-content:space-between;font-size:9px;color:var(--t3);font-weight:500}
+
+/* STATS GRID */
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.stat-card{background:var(--bg2);border:1px solid var(--bdr);border-radius:4px;padding:8px 10px}
+.stat-card .label{font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:0.8px;font-weight:600;margin-bottom:3px}
+.stat-card .val{font-size:15px;font-weight:700;font-family:'IBM Plex Mono',monospace}
+
+/* PREDICTION LOG */
+.plog{display:flex;flex-direction:column;gap:2px;max-height:320px;overflow-y:auto}
+.plog-entry{display:grid;grid-template-columns:56px 1fr 50px 46px;gap:6px;padding:4px 6px;background:var(--bg2);border-radius:3px;font-size:10px;align-items:center;font-family:'IBM Plex Mono',monospace}
+.plog-time{color:var(--t3)}.plog-price{color:var(--t2)}.plog-bps{font-weight:600;text-align:right}
+.plog-bps.up{color:var(--green)}.plog-bps.dn{color:var(--red)}
+.plog-gate{font-size:8px;font-weight:700;text-align:center;border-radius:2px;padding:1px 3px}
+.plog-gate.trade{color:var(--green);background:var(--green-bg)}.plog-gate.skip{color:var(--t3);background:var(--bg0)}
+
+/* EXPLAINER */
+.explainer{padding:12px 16px;border-top:1px solid var(--bdr);background:var(--bg0)}
+.explainer p{font-size:10px;color:var(--t3);line-height:1.5}
+.explainer strong{color:var(--t2)}
+
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--bdr2);border-radius:2px}
+
+@media(max-width:768px){
+  .main{grid-template-columns:1fr;grid-template-rows:50vh 1fr}
+  .chart-area{border-right:none;border-bottom:1px solid var(--bdr)}
+  .verdict-metrics{flex-wrap:wrap;gap:8px}
+  .hdr-stats{gap:12px}
+}
 </style>
 </head>
 <body>
+
+<!-- HEADER -->
 <div class="header">
   <div class="header-left">
-    <div class="logo">SNIPER<span>.</span>LIVE</div>
-    <div class="badge off" id="badge"><div class="dot"></div><span id="status-txt">DISCONNECTED</span></div>
+    <div class="logo">BTC <span>SIGNAL</span> MONITOR</div>
+    <div class="conn-badge off" id="badge"><div class="dot"></div><span id="status-txt">DISCONNECTED</span></div>
   </div>
-  <div class="hdr-r">
-    <div class="hdr-s"><div class="l">Buffer</div><div class="v" id="buf-n">&mdash;</div></div>
-    <div class="hdr-s"><div class="l">Span</div><div class="v" id="buf-s">&mdash;</div></div>
-    <div class="hdr-s"><div class="l">Predictions</div><div class="v" id="pred-n">0</div></div>
+  <div class="hdr-stats">
+    <div class="hdr-stat"><div class="label">Buffer</div><div class="val" id="buf-n">&mdash;</div></div>
+    <div class="hdr-stat"><div class="label">Span</div><div class="val" id="buf-s">&mdash;</div></div>
+    <div class="hdr-stat"><div class="label">Predictions</div><div class="val" id="pred-n">0</div></div>
+    <div class="hdr-stat"><div class="label">Runtime</div><div class="val" id="runtime">&mdash;</div></div>
   </div>
 </div>
+
+<!-- VERDICT BANNER -->
+<div class="verdict-bar">
+  <div class="verdict-main">
+    <div class="verdict-icon wait" id="verdict-icon">?</div>
+    <div class="verdict-text">
+      <div class="title" id="verdict-title">COLLECTING DATA</div>
+      <div class="sub" id="verdict-sub">Need 42 independent samples to determine if model beats random</div>
+    </div>
+  </div>
+  <div class="verdict-metrics">
+    <div class="vm"><div class="label">Accuracy</div><div class="val wait" id="vm-acc">&mdash;</div></div>
+    <div class="vm"><div class="label">vs Random</div><div class="val wait" id="vm-edge">&mdash;</div></div>
+    <div class="vm"><div class="label">Cum. PnL</div><div class="val wait" id="vm-pnl">&mdash;</div></div>
+    <div class="vm"><div class="label">Trades</div><div class="val neutral" id="vm-trades">0</div></div>
+  </div>
+</div>
+
+<!-- MAIN -->
 <div class="main">
   <div class="chart-area">
     <div class="toolbar">
       <div class="pair">
         <span class="pair-name">BTCUSDT</span>
-        <span class="cur-price" id="cur-price">&mdash;</span>
+        <span class="cur-price mono" id="cur-price">&mdash;</span>
         <span class="chg up" id="chg">&mdash;</span>
       </div>
       <div class="legend">
-        <div class="leg-i"><div class="leg-actual"></div><span>Actual</span></div>
-        <div class="leg-i"><div class="leg-pred"></div><span>Predicted (T+5m)</span></div>
+        <div class="leg-i"><div class="leg-line leg-actual"></div><span>Price</span></div>
+        <div class="leg-i"><div class="leg-line leg-pred"></div><span>Model Prediction (T+5min)</span></div>
       </div>
     </div>
     <div id="chart-box"></div>
   </div>
+
   <div class="sidebar">
+    <!-- Current Signal -->
     <div class="sec">
-      <div class="sec-t">Current Signal</div>
-      <div class="sig-card">
-        <div class="sig-dir wait" id="sig-dir">WAITING</div>
-        <div class="sig-mag" id="sig-mag">Awaiting first prediction...</div>
-        <div class="sig-row">
-          <div class="sig-item"><div class="l">Now</div><div class="v" id="sig-now">&mdash;</div></div>
-          <div class="sig-item"><div class="l">T+5m Target</div><div class="v" id="sig-tgt">&mdash;</div></div>
+      <div class="sec-title">Current Signal</div>
+      <div class="signal-card">
+        <div class="signal-direction wait" id="sig-dir">WAITING</div>
+        <div class="signal-sub" id="sig-mag">Awaiting first prediction...</div>
+        <div class="signal-gate skip" id="sig-gate">NO SIGNAL</div>
+        <div class="signal-prices">
+          <div class="sp"><div class="label">Current</div><div class="val" id="sig-now">&mdash;</div></div>
+          <div class="sp"><div class="label">Predicted</div><div class="val" id="sig-tgt">&mdash;</div></div>
         </div>
       </div>
     </div>
+
+    <!-- Accuracy vs Random -->
     <div class="sec">
-      <div class="sec-t">Live Stats</div>
-      <div class="stats">
-        <div class="st"><div class="l">Avg |BPS|</div><div class="v" id="s-avg">&mdash;</div></div>
-        <div class="st"><div class="l">Max |BPS|</div><div class="v" id="s-max">&mdash;</div></div>
-        <div class="st"><div class="l">Up / Down</div><div class="v" id="s-ratio">&mdash;</div></div>
-        <div class="st"><div class="l">Hit Rate</div><div class="v" id="s-hit">&mdash;</div></div>
+      <div class="sec-title">Model Accuracy vs Random (50%)</div>
+      <div class="accuracy-section">
+        <div style="position:relative;margin-top:14px">
+          <div class="acc-baseline-label">50% random</div>
+          <div class="acc-bar-wrap">
+            <div class="acc-bar-fill neutral" id="acc-bar" style="width:50%">50.0%</div>
+            <div class="acc-baseline"></div>
+          </div>
+        </div>
+        <div class="acc-labels"><span>0% (always wrong)</span><span>100% (always right)</span></div>
       </div>
     </div>
+
+    <!-- Stats -->
+    <div class="sec">
+      <div class="sec-title">Performance</div>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="label">Avg Move</div><div class="val" id="s-avg">&mdash;</div></div>
+        <div class="stat-card"><div class="label">Max Move</div><div class="val" id="s-max">&mdash;</div></div>
+        <div class="stat-card"><div class="label">Direction</div><div class="val" id="s-ratio">&mdash;</div></div>
+        <div class="stat-card"><div class="label">Gate Pass</div><div class="val" id="s-gate">&mdash;</div></div>
+      </div>
+    </div>
+
+    <!-- Log -->
     <div class="sec" style="flex:1;min-height:0">
-      <div class="sec-t">Prediction Log</div>
+      <div class="sec-title">Prediction Log</div>
       <div class="plog" id="plog"></div>
+    </div>
+
+    <!-- Explainer -->
+    <div class="explainer">
+      <p><strong>How to read this:</strong> The model predicts BTC price direction every 10 seconds. 
+      The <strong>accuracy bar</strong> shows hit rate vs the 50% random baseline. 
+      Above 50% = model has skill. The <strong>gate</strong> filters for high-confidence moments. 
+      TRADE = model is confident. SKIP = conditions unfavorable. 
+      <strong>Cumulative PnL</strong> shows total profit in basis points (1 bps = 0.01%).</p>
     </div>
   </div>
 </div>
+
 <script>
-const WS_URL="ws://localhost:8765";
-let ws=null,chart=null,priceSeries=null,predSeries=null,reconTimer=null,predCount=0;
-const pendingPreds=[];
-let hits=0,checked=0,allBps=[],upCount=0,dnCount=0;
-const priceArr=[],predArr=[];
+const WS_URL="ws://92.4.87.182:8765";
+let ws=null,chart=null,priceSeries=null,predSeries=null,reconTimer=null;
+let predCount=0,startTime=null;
+let hits=0,checked=0,totalPnlBps=0;
+let allBps=[],upCount=0,dnCount=0,tradeCount=0,skipCount=0;
+const pendingPreds=[],priceArr=[],predArr=[];
 
 function initChart(){
   const c=document.getElementById("chart-box");
   chart=LightweightCharts.createChart(c,{
     width:c.clientWidth,height:c.clientHeight,
-    layout:{background:{type:"solid",color:"#0a0a0f"},textColor:"#6e6e8a",fontFamily:"JetBrains Mono",fontSize:11},
-    grid:{vertLines:{color:"#1a1a28"},horzLines:{color:"#1a1a28"}},
-    crosshair:{mode:LightweightCharts.CrosshairMode.Normal,vertLine:{color:"#44445a",width:1,style:2},horzLine:{color:"#44445a",width:1,style:2}},
-    rightPriceScale:{borderColor:"#1e1e2e",scaleMargins:{top:0.1,bottom:0.1}},
-    timeScale:{borderColor:"#1e1e2e",timeVisible:true,secondsVisible:true,rightOffset:30},
+    layout:{background:{type:"solid",color:"#080810"},textColor:"#55557a",fontFamily:"IBM Plex Mono",fontSize:10},
+    grid:{vertLines:{color:"#12122000"},horzLines:{color:"#1a1a2800"}},
+    crosshair:{mode:LightweightCharts.CrosshairMode.Normal,vertLine:{color:"#33334a",width:1,style:2},horzLine:{color:"#33334a",width:1,style:2}},
+    rightPriceScale:{borderColor:"#1e1e30",scaleMargins:{top:0.08,bottom:0.08},textColor:"#55557a"},
+    timeScale:{borderColor:"#1e1e30",timeVisible:true,secondsVisible:false,rightOffset:20,textColor:"#55557a"},
     handleScale:{mouseWheel:true,pinch:true},handleScroll:{mouseWheel:true,pressedMouseMove:true}
   });
-  priceSeries=chart.addLineSeries({color:"#e8e8f0",lineWidth:2,priceLineVisible:true,priceLineColor:"#e8e8f0",priceLineWidth:1,lastValueVisible:true});
-  predSeries=chart.addLineSeries({color:"#00e5ff",lineWidth:2,lineStyle:LightweightCharts.LineStyle.Dashed,priceLineVisible:false,lastValueVisible:true});
+  priceSeries=chart.addLineSeries({color:"#e4e4f0",lineWidth:2,priceLineVisible:true,priceLineColor:"#e4e4f044",priceLineWidth:1,lastValueVisible:true});
+  predSeries=chart.addLineSeries({color:"#00c8ff",lineWidth:1.5,lineStyle:LightweightCharts.LineStyle.Dashed,priceLineVisible:false,lastValueVisible:true,crosshairMarkerVisible:false});
   new ResizeObserver(e=>{for(const en of e)chart.applyOptions({width:en.contentRect.width,height:en.contentRect.height})}).observe(c);
 }
 
 function ms2t(ms){return Math.floor(ms/1000)}
-function fmtT(ms){return new Date(ms).toLocaleTimeString("en-US",{hour12:false})}
+function fmtT(ms){return new Date(ms).toLocaleTimeString("en-US",{hour12:false,hour:"2-digit",minute:"2-digit",second:"2-digit"})}
 function fmtP(p){return p.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}
 
 function addPrice(tMs,price){
@@ -146,57 +276,151 @@ function addPredPt(tMs,price){
   const pt={time:t,value:price};predArr.push(pt);predSeries.update(pt);
 }
 
+function updateRuntime(){
+  if(!startTime)return;
+  const s=Math.floor((Date.now()-startTime)/1000);
+  const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);
+  document.getElementById("runtime").textContent=h+"h "+m+"m";
+}
+setInterval(updateRuntime,10000);
+
+function updateVerdict(){
+  const icon=document.getElementById("verdict-icon");
+  const title=document.getElementById("verdict-title");
+  const sub=document.getElementById("verdict-sub");
+  const accEl=document.getElementById("vm-acc");
+  const edgeEl=document.getElementById("vm-edge");
+  const pnlEl=document.getElementById("vm-pnl");
+
+  if(checked<5){
+    icon.className="verdict-icon wait";icon.textContent="?";
+    title.textContent="COLLECTING DATA";
+    sub.textContent="Need more resolved predictions to evaluate model";
+    accEl.className="val wait";accEl.textContent="...";
+    edgeEl.className="val wait";edgeEl.textContent="...";
+    return;
+  }
+
+  const acc=(hits/checked*100);
+  const edge=acc-50;
+  accEl.textContent=acc.toFixed(1)+"%";
+  edgeEl.textContent=(edge>=0?"+":"")+edge.toFixed(1)+"%";
+  pnlEl.textContent=(totalPnlBps>=0?"+":"")+totalPnlBps.toFixed(1);
+
+  // Update accuracy bar
+  const bar=document.getElementById("acc-bar");
+  bar.style.width=Math.max(5,Math.min(95,acc))+"%";
+  bar.textContent=acc.toFixed(1)+"%";
+
+  if(acc>55&&checked>=20){
+    icon.className="verdict-icon good";icon.textContent="\u2713";
+    title.textContent="MODEL HAS SIGNAL";
+    sub.textContent="Accuracy "+acc.toFixed(1)+"% on "+checked+" checked predictions ("+edge.toFixed(1)+"% above random)";
+    accEl.className="val good";edgeEl.className="val good";
+    bar.className="acc-bar-fill good";
+    pnlEl.className=totalPnlBps>=0?"val good":"val bad";
+  } else if(acc>50&&checked>=10){
+    icon.className="verdict-icon wait";icon.textContent="\u2191";
+    title.textContent="PROMISING — NEED MORE DATA";
+    sub.textContent="Accuracy "+acc.toFixed(1)+"% on "+checked+" predictions. Need 42+ independent samples to confirm.";
+    accEl.className="val wait";edgeEl.className="val wait";
+    bar.className="acc-bar-fill good";
+    pnlEl.className=totalPnlBps>=0?"val good":"val bad";
+  } else if(acc<=50&&checked>=20){
+    icon.className="verdict-icon bad";icon.textContent="\u2717";
+    title.textContent="NO SIGNAL DETECTED";
+    sub.textContent="Accuracy "+acc.toFixed(1)+"% on "+checked+" predictions. Model is not beating random.";
+    accEl.className="val bad";edgeEl.className="val bad";
+    bar.className="acc-bar-fill bad";
+    pnlEl.className="val bad";
+  } else {
+    icon.className="verdict-icon wait";icon.textContent="?";
+    title.textContent="TOO EARLY TO TELL";
+    sub.textContent=checked+" predictions checked so far. Need more data.";
+    accEl.className="val neutral";edgeEl.className="val neutral";
+    bar.className="acc-bar-fill neutral";
+    pnlEl.className="val neutral";
+  }
+}
+
 function checkPreds(curPrice,curMs){
   for(let i=pendingPreds.length-1;i>=0;i--){
     const p=pendingPreds[i];
     if(curMs>=p.tgtTime){
       const aRet=(curPrice-p.pAtPred)/p.pAtPred;
       const pRet=(p.predP-p.pAtPred)/p.pAtPred;
-      if(Math.abs(aRet)>0.0001){
-        if(Math.sign(aRet)===Math.sign(pRet))hits++;
+      if(Math.abs(aRet)>0.00005){
+        const correct=Math.sign(aRet)===Math.sign(pRet);
+        if(correct)hits++;
         checked++;
+        // PnL: if we followed the signal, did we profit?
+        const pnl=Math.sign(pRet)*aRet*10000; // in bps
+        totalPnlBps+=pnl;
       }
       pendingPreds.splice(i,1);
     }
   }
-  if(checked>0)document.getElementById("s-hit").textContent=(hits/checked*100).toFixed(1)+"%";
+  document.getElementById("vm-trades").textContent=checked;
+  updateVerdict();
 }
 
 function updateSig(price,pred){
   const lr=pred.log_return,bps=Math.abs(lr)*10000,up=lr>0;
+  const shouldTrade=pred.should_trade;
+  
   const d=document.getElementById("sig-dir");
-  d.textContent=up?"LONG":"SHORT";d.className="sig-dir "+(up?"up":"dn");
+  d.textContent=up?"LONG":"SHORT";d.className="signal-direction "+(up?"up":"dn");
   document.getElementById("sig-mag").textContent=bps.toFixed(1)+" bps predicted move";
   document.getElementById("sig-now").textContent="$"+fmtP(price.price);
   document.getElementById("sig-tgt").textContent="$"+fmtP(pred.price);
+  
+  const gate=document.getElementById("sig-gate");
+  if(shouldTrade){
+    gate.textContent="TRADE";gate.className="signal-gate trade";
+    tradeCount++;
+  } else {
+    gate.textContent="SKIP";gate.className="signal-gate skip";
+    skipCount++;
+  }
+  document.getElementById("s-gate").textContent=tradeCount+"/"+(tradeCount+skipCount);
+  
   document.getElementById("cur-price").textContent="$"+fmtP(price.price);
   const ch=document.getElementById("chg");
   ch.textContent=(up?"+":"-")+bps.toFixed(1)+" bps";ch.className="chg "+(up?"up":"dn");
+  
   allBps.push(bps);
-  document.getElementById("s-avg").textContent=(allBps.reduce((a,b)=>a+b,0)/allBps.length).toFixed(1);
-  document.getElementById("s-max").textContent=Math.max(...allBps).toFixed(1);
+  document.getElementById("s-avg").textContent=(allBps.reduce((a,b)=>a+b,0)/allBps.length).toFixed(1)+" bps";
+  document.getElementById("s-max").textContent=Math.max(...allBps).toFixed(1)+" bps";
   if(up)upCount++;else dnCount++;
-  document.getElementById("s-ratio").textContent=upCount+"/"+dnCount;
+  document.getElementById("s-ratio").textContent=upCount+" up / "+dnCount+" dn";
 }
 
 function addLog(pred){
   const log=document.getElementById("plog");
   const lr=pred.log_return,bps=Math.abs(lr)*10000,up=lr>0;
-  const e=document.createElement("div");e.className="plog-e";
-  const timeStr=fmtT(pred.made_at);
-  const priceStr="$"+fmtP(pred.price);
+  const shouldTrade=pred.should_trade;
+  const e=document.createElement("div");e.className="plog-entry";
   const bpsStr=(up?"+":"-")+bps.toFixed(1);
-  const bpsCls=up?"up":"dn";
-  e.innerHTML='<span class="plog-t">'+timeStr+'</span><span class="plog-p">'+priceStr+'</span><span class="plog-b '+bpsCls+'">'+bpsStr+'</span>';
+  const gateCls=shouldTrade?"trade":"skip";
+  const gateStr=shouldTrade?"TRD":"SKP";
+  e.innerHTML='<span class="plog-time">'+fmtT(pred.made_at)+'</span><span class="plog-price">$'+fmtP(pred.price)+'</span><span class="plog-bps '+(up?"up":"dn")+'">'+bpsStr+'</span><span class="plog-gate '+gateCls+'">'+gateStr+'</span>';
   log.firstChild?log.insertBefore(e,log.firstChild):log.appendChild(e);
-  while(log.children.length>100)log.removeChild(log.lastChild);
+  while(log.children.length>150)log.removeChild(log.lastChild);
 }
 
 function connect(){
   if(ws&&(ws.readyState===0||ws.readyState===1))return;
   ws=new WebSocket(WS_URL);
-  ws.onopen=()=>{document.getElementById("badge").className="badge";document.getElementById("status-txt").textContent="LIVE"};
-  ws.onclose=()=>{document.getElementById("badge").className="badge off";document.getElementById("status-txt").textContent="DISCONNECTED";clearTimeout(reconTimer);reconTimer=setTimeout(connect,3000)};
+  ws.onopen=()=>{
+    document.getElementById("badge").className="conn-badge on";
+    document.getElementById("status-txt").textContent="LIVE";
+    if(!startTime)startTime=Date.now();
+  };
+  ws.onclose=()=>{
+    document.getElementById("badge").className="conn-badge off";
+    document.getElementById("status-txt").textContent="DISCONNECTED";
+    clearTimeout(reconTimer);reconTimer=setTimeout(connect,3000);
+  };
   ws.onerror=()=>{};
   ws.onmessage=(ev)=>{
     const m=JSON.parse(ev.data);
@@ -212,10 +436,11 @@ function connect(){
       checkPreds(pr.price,pr.time);
       predCount++;
       document.getElementById("pred-n").textContent=predCount;
-      document.getElementById("buf-n").textContent=m.buffer_size.toLocaleString();
-      document.getElementById("buf-s").textContent=Math.round(m.buffer_span_s)+"s";
+      if(m.buffer_size)document.getElementById("buf-n").textContent=m.buffer_size.toLocaleString();
+      if(m.buffer_span_s)document.getElementById("buf-s").textContent=Math.round(m.buffer_span_s)+"s";
       updateSig(pr,pd);addLog(pd);
       chart.timeScale().scrollToRealTime();
+      updateRuntime();
     }
   };
 }
