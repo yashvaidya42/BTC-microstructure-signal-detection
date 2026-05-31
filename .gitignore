@@ -30,3 +30,10 @@ venv/
 __pycache__/
 backup_pre_fixes_2026-05-23/
 .claude/
+
+# Training artifacts (not needed for inference)
+model_output_xgb_v4/crash_recovery.json
+model_output_xgb_v4/training_curve.json
+model_output_xgb_v4/artifacts.json
+model_output_xgb_v4/training_log.txt
+model_output_xgb_v4/optuna_cache_*.npz
