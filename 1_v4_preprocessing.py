@@ -64,6 +64,10 @@ except ImportError:
 INPUT_DIR  = "./btc_trade_data/2026"
 OUTPUT_DIR = "./processed_daily_parquets_v4"
 
+# --- Training Window ---
+# How many recent days to use. Set via env var BTC_TRAINING_DAYS or default 150.
+MAX_TRAINING_DAYS = int(os.environ.get('BTC_TRAINING_DAYS', '150'))
+
 # --- Regression Target ---
 LOOK_AHEAD_SECONDS = 300          # 5-minute forward log-return
 
@@ -71,15 +75,13 @@ LOOK_AHEAD_SECONDS = 300          # 5-minute forward log-return
 WINDOW = 300
 
 # --- Tick Subsampling ---
-# Features are computed at tick level (accurate rolling windows), then we keep
-# one row per SUBSAMPLE_SECONDS to eliminate redundancy.  Consecutive ticks
-# share >99.9% of their feature/target windows — training on all of them
-# inflates metrics and teaches the model nothing new.
 SUBSAMPLE_SECONDS = 60            # 0 = keep every tick (not recommended)
 
-# --- Date Filter ---
-START_DATE = "2026-01-01"
-END_DATE   = "2026-05-26"
+# --- Date Filter (computed from MAX_TRAINING_DAYS) ---
+from datetime import timedelta
+_today = datetime.now()
+END_DATE   = (_today - timedelta(days=1)).strftime("%Y-%m-%d")   # yesterday
+START_DATE = (_today - timedelta(days=MAX_TRAINING_DAYS)).strftime("%Y-%m-%d")
 
 # --- Smart Scheduler (i5-11400H, 16 GB RAM) ---
 TARGET_BATCH_SIZE_MB  = 30
@@ -814,7 +816,7 @@ def get_filtered_zip_files(root_dir, start_str, end_str):
 def process_streaming(input_dir, output_dir):
     print("=" * 80)
     print("PREPROCESSING v4 — PRICE-INVARIANT FEATURES (12)")
-    print(f"  Range: {START_DATE} to {END_DATE}")
+    print(f"  Range: {START_DATE} to {END_DATE} (last {MAX_TRAINING_DAYS} days)")
     print(f"  Workers: {NUM_WORKERS}")
     print(f"  Batch target: {TARGET_BATCH_SIZE_MB} MB  |  Max parallel: {MAX_PARALLEL_SIZE_MB} MB")
     print(f"  Look-ahead: {LOOK_AHEAD_SECONDS}s  |  Window: {WINDOW}s  |  Subsample: {SUBSAMPLE_SECONDS}s")
@@ -823,6 +825,11 @@ def process_streaming(input_dir, output_dir):
     zip_files = get_filtered_zip_files(input_dir, START_DATE, END_DATE)
     if not zip_files:
         raise FileNotFoundError(f"No zip files found in {input_dir} between {START_DATE} and {END_DATE}")
+
+    # Trim to MAX_TRAINING_DAYS if more files exist
+    if len(zip_files) > MAX_TRAINING_DAYS:
+        zip_files = zip_files[-MAX_TRAINING_DAYS:]
+        print(f"  Trimmed to latest {MAX_TRAINING_DAYS} days")
 
     print(f"Selected {len(zip_files)} files to process.\n")
 
