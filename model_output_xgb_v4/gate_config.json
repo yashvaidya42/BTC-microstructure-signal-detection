@@ -1,6 +1,6 @@
 {
-  "vol_low": 1.5638839386156178e-06,
-  "vol_high": 5.754472767875992e-06,
+  "vol_low": 1.584134997756337e-06,
+  "vol_high": 5.989186611259352e-06,
   "vol_low_percentile": "calibrated",
   "vol_high_percentile": "calibrated",
   "min_trade_count_300s": 500,
@@ -15,10 +15,10 @@
   ],
   "min_agreement_ratio": 0.6,
   "calibration_metadata": {
-    "baseline_accuracy": 0.5156341455900927,
-    "gated_accuracy": 0.5515451174289246,
-    "gated_trades": 4045,
+    "baseline_accuracy": 0.5182562650083123,
+    "gated_accuracy": 0.5419566107245191,
+    "gated_trades": 4886,
     "test_samples": 33005,
-    "pass_rate": 0.1225571883048023
+    "pass_rate": 0.14803817603393427
   }
 }
