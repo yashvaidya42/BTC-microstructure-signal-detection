@@ -11,14 +11,15 @@
     2,
     5,
     6,
-    7
+    7,
+    12
   ],
   "min_agreement_ratio": 0.6,
   "calibration_metadata": {
-    "baseline_accuracy": 0.5100076863950808,
-    "gated_accuracy": 0.5144209436473894,
-    "gated_trades": 6761,
+    "baseline_accuracy": 0.5093620292083013,
+    "gated_accuracy": 0.5166211293260473,
+    "gated_trades": 8784,
     "test_samples": 33005,
-    "pass_rate": 0.20484775034085745
+    "pass_rate": 0.2661414937130738
   }
 }
