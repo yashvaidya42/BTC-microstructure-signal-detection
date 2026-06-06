@@ -7,7 +7,7 @@ Architecture:
   2. Connect to Binance WebSocket (btcusdt@trade)
   3. Backfill 60 min of history from REST API
   4. Merge (dedupe by trade_id), fill circular buffer
-  5. Compute 12 V4 features using EXACT same Numba functions as training
+  5. Compute 13 V4 features using EXACT same Numba functions as training
   6. Normalize with saved scaler, predict with saved XGBoost model
   7. Push (actual_price, predicted_price_5m) to dashboard
   8. Log all predictions to CSV for post-analysis
@@ -100,7 +100,7 @@ DASHBOARD_PORT = 8765
 LOG_DIR = str(BASE_DIR / "live_test_results")
 LOG_CSV = None  # set in main()
 
-# --- V4 Feature List (EXACT order matching training, 12 features) ---
+# --- V4 Feature List (EXACT order matching training, 13 features) ---
 FEATURE_COLUMNS = [
     'price_volatility_300s',
     'vol_imbalance_300s',
@@ -114,6 +114,7 @@ FEATURE_COLUMNS = [
     'rel_size_300s',
     'inter_time_cv_300s',
     'size_cv_300s',
+    'trend_strength_1h',
 ]
 
 
@@ -209,8 +210,8 @@ def _rolling_vwap(ts_us, prices, qtys, win_sec):
 
 def compute_features_v4(ts_us, prices, qty, side):
     """
-    Computes the 12 V4 features for the LAST row of the buffer.
-    Returns: np.ndarray of shape (12,) in EXACT training column order.
+    Computes the 13 V4 features for the LAST row of the buffer.
+    Returns: np.ndarray of shape (13,) in EXACT training column order.
     """
     n = len(ts_us)
     w = 300  # 5-min window
@@ -296,7 +297,17 @@ def compute_features_v4(ts_us, prices, qty, side):
     # [V4 P7] Size CV ratio
     size_cv_300s = size_std_300s / (avg_size_300s + 1e-9)
 
-    # === ASSEMBLE: LAST ROW ONLY, in EXACT training column order (12 features) ===
+    # === 6. TREND FEATURE ===
+    # 1-hour rolling return — computed identically to 1_v4_preprocessing.py.
+    TREND_WINDOW_US = 3600 * 1_000_000  # 1 hour in microseconds
+    trend_mask = ts_us >= (ts_us[-1] - TREND_WINDOW_US)
+    if trend_mask.any():
+        first_trend_idx = int(np.argmax(trend_mask))
+        trend_strength_1h = (prices[-1] - prices[first_trend_idx]) / prices[first_trend_idx]
+    else:
+        trend_strength_1h = 0.0
+
+    # === ASSEMBLE: LAST ROW ONLY, in EXACT training column order (13 features) ===
     features = np.array([
         price_volatility_300s[-1],     # 0
         vol_imbalance_300s[-1],        # 1
@@ -310,6 +321,7 @@ def compute_features_v4(ts_us, prices, qty, side):
         rel_size_300s[-1],             # 9
         inter_time_cv_300s[-1],        # 10
         size_cv_300s[-1],              # 11
+        trend_strength_1h,             # 12
     ], dtype=np.float32)
 
     return features
@@ -352,6 +364,13 @@ class RegimeGate:
     """
 
     DEFAULT_CONFIG = {
+        # Session filter: only flag TRADE during historically productive UTC hours.
+        # Hours with >50% accuracy from 6-day live test (May 30 - Jun 5, 2026).
+        # Model still predicts every 10s outside allowed hours (for data collection),
+        # but gate_decision will always be SKIP with rejection_reason='session'.
+        'session_filter_enabled': True,
+        'allowed_hours_utc': [3, 4, 5, 8, 9, 10, 11, 12, 13, 14],
+
         # Volatility gate: price_volatility_300s percentile range
         # Only trade when vol is elevated but not extreme
         'vol_low_percentile': 60,    # below this = too quiet, noise dominates
@@ -367,9 +386,10 @@ class RegimeGate:
 
         # Feature agreement gate: top N features must agree on direction
         'agreement_enabled': True,
-        # Indices of key directional features in the 12-feature vector:
-        # vol_imbalance(1), vwap_dev(2), feat_sma_trend(5), feat_rsi_norm(6), tfi_quote_norm(7)
-        'directional_feature_indices': [1, 2, 5, 6, 7],
+        # Indices of key directional features in the 13-feature vector:
+        # vol_imbalance(1), vwap_dev(2), feat_sma_trend(5), feat_rsi_norm(6),
+        # tfi_quote_norm(7), trend_strength_1h(12)
+        'directional_feature_indices': [1, 2, 5, 6, 7, 12],
         'min_agreement_ratio': 0.6,  # at least 60% of directional features agree
     }
 
@@ -384,6 +404,8 @@ class RegimeGate:
             print(f"[GATE] Using default config (no calibration file found)")
 
         print(f"[GATE] Thresholds:")
+        print(f"  session_filter: {'enabled' if self.config.get('session_filter_enabled') else 'disabled'}"
+              f"  allowed_hours={self.config.get('allowed_hours_utc', 'all')}")
         print(f"  vol range    : [{self.config['vol_low']:.8f}, {self.config['vol_high']:.8f}]")
         print(f"  min_pred_bps : {self.config['min_pred_bps']:.1f} bps")
         print(f"  min_trades   : {self.config['min_trade_count_300s']}")
@@ -395,6 +417,7 @@ class RegimeGate:
         self.total_predictions = 0
         self.trades_passed = 0
         self.gate_rejections = {
+            'session': 0,
             'volatility_low': 0,
             'volatility_high': 0,
             'volume': 0,
@@ -419,6 +442,14 @@ class RegimeGate:
             'volatility': round(float(features_raw[0]), 8),  # price_volatility_300s
             'trade_count': int(trade_count_300s),
         }
+
+        # Gate 0: Session filter
+        if self.config.get('session_filter_enabled', False):
+            current_hour = datetime.utcnow().hour
+            allowed = self.config.get('allowed_hours_utc', list(range(24)))
+            if current_hour not in allowed:
+                self.gate_rejections['session'] += 1
+                return False, 'session', details
 
         # Gate 1: Volatility regime
         vol = float(features_raw[0])  # price_volatility_300s is index 0
@@ -447,6 +478,7 @@ class RegimeGate:
             # vwap_dev > 0 = price above vwap = mean revert down
             # sma_trend > 0 = price above sma = mean revert down
             # rsi_norm > 0 = overbought = mean revert down
+            # trend_strength_1h > 0 = trending up = agrees with UP prediction (no flip)
             feature_signs = np.sign(features_raw[indices])
             # Flip mean-reverting features: positive feature → expect DOWN
             for i, idx in enumerate(indices):
@@ -874,7 +906,7 @@ class LiveEngine:
 
         with open(KEEPIDX_PATH, 'rb') as f:
             self.keep_idx = pickle.load(f)
-        print(f"  keep_idx: {len(self.keep_idx)} features kept from 12")
+        print(f"  keep_idx: {len(self.keep_idx)} features kept from 13")
         print(f"  Indices: {self.keep_idx}")
 
         n_expected = len(self.keep_idx)
@@ -1216,7 +1248,7 @@ class LiveEngine:
         print(f"\n{'='*60}")
         print(f"LIVE ENGINE v4 — CONTINUOUS EVALUATION")
         print(f"  Model     : {MODEL_PATH}")
-        print(f"  Features  : {len(FEATURE_COLUMNS)} (V4, 12 features)")
+        print(f"  Features  : {len(FEATURE_COLUMNS)} (V4, 13 features)")
         print(f"  Interval  : {INFERENCE_INTERVAL_SEC}s")
         print(f"  Duration  : {duration_str}")
         print(f"  Target    : 42 independent samples (~3.5 hours)")

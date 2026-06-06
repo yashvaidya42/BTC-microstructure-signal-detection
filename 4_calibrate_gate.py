@@ -177,7 +177,7 @@ def main():
         'min_trade_count_300s':   500,  # default, hard to calibrate from .npz
         'min_pred_bps':           float(best_config['min_pred_bps']),
         'agreement_enabled':      True,
-        'directional_feature_indices': [1, 2, 5, 6, 7],
+        'directional_feature_indices': [1, 2, 5, 6, 7, 12],
         'min_agreement_ratio':    0.6,
         'calibration_metadata': {
             'baseline_accuracy': baseline_acc,

@@ -16,11 +16,12 @@ CHANGES FROM v3:
       - avg_size + size_std → size_cv_300s (no conflict with P2 normalization,
         CV = std/mean is already scale-invariant)
 
-Final feature count: 12
+Final feature count: 13
   From v3 (kept):  price_volatility_300s, vol_imbalance_300s, vwap_dev_300s,
                    intensity_z_300s, feat_vol_force, feat_sma_trend, feat_rsi_norm
   Modified (P2):   tfi_quote_norm_300s, amihud_illiquidity_300s, rel_size_300s
   New (P7 CV):     inter_time_cv_300s, size_cv_300s
+  New (trend):     trend_strength_1h
 """
 
 import os, sys, zipfile, gc, time, json, warnings
@@ -238,8 +239,8 @@ def _precompute_base_metrics(ts_us, prices, qty, side):
 
 def compute_features_regression(df, verbose=True):
     """
-    Computes 12 features (v4):
-      7 kept from v3, 3 modified for price-invariance, 2 new CV ratios.
+    Computes 13 features (v4):
+      7 kept from v3, 3 modified for price-invariance, 2 new CV ratios, 1 trend.
     Weight column removed (P3).
     """
     n = len(df)
@@ -337,6 +338,20 @@ def compute_features_regression(df, verbose=True):
     size_cv_300s = size_std_300s / (avg_size_300s + 1e-9)
 
     # =====================================================================
+    # 6. TREND FEATURE
+    # =====================================================================
+
+    # 1-hour rolling return — tells model if market is trending or choppy.
+    # Computed identically in 5_live_inference.py compute_features_v4().
+    TREND_WINDOW = 3600  # 1 hour in seconds
+    timestamps_s = ts_us // 1_000_000
+    trend_idx = np.searchsorted(timestamps_s, timestamps_s - TREND_WINDOW, side='left')
+    trend_strength_1h = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        if trend_idx[i] < i:
+            trend_strength_1h[i] = (prices[i] - prices[trend_idx[i]]) / prices[trend_idx[i]]
+
+    # =====================================================================
     # TARGET (P3: no weight column)
     # =====================================================================
 
@@ -352,7 +367,7 @@ def compute_features_regression(df, verbose=True):
         'timestamp':                ts_us,
         'target':                   target,
 
-        # --- 12 FEATURES ---
+        # --- 13 FEATURES ---
         # Kept from v3 (7)
         'price_volatility_300s':    price_volatility_300s,
         'vol_imbalance_300s':       vol_imbalance_300s,
@@ -370,6 +385,9 @@ def compute_features_regression(df, verbose=True):
         # CV ratios replacing redundant pairs (P7) (2)
         'inter_time_cv_300s':       inter_time_cv_300s,
         'size_cv_300s':             size_cv_300s,
+
+        # 1-hour trend strength (1)
+        'trend_strength_1h':        trend_strength_1h,
     })
 
     fcols = result.select_dtypes('float').columns
@@ -771,7 +789,7 @@ def process_batches_smart(zip_files, output_dir, num_workers):
 # =============================================================================
 
 def build_feature_column_list():
-    """Returns the 12 features for v4."""
+    """Returns the 13 features for v4."""
     return [
         # Kept from v3
         'price_volatility_300s',
@@ -788,6 +806,8 @@ def build_feature_column_list():
         # CV ratios (P7)
         'inter_time_cv_300s',
         'size_cv_300s',
+        # 1-hour trend strength
+        'trend_strength_1h',
     ]
 
 
@@ -815,7 +835,7 @@ def get_filtered_zip_files(root_dir, start_str, end_str):
 
 def process_streaming(input_dir, output_dir):
     print("=" * 80)
-    print("PREPROCESSING v4 — PRICE-INVARIANT FEATURES (12)")
+    print("PREPROCESSING v4 — PRICE-INVARIANT FEATURES (13)")
     print(f"  Range: {START_DATE} to {END_DATE} (last {MAX_TRAINING_DAYS} days)")
     print(f"  Workers: {NUM_WORKERS}")
     print(f"  Batch target: {TARGET_BATCH_SIZE_MB} MB  |  Max parallel: {MAX_PARALLEL_SIZE_MB} MB")
